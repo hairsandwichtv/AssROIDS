@@ -1,5 +1,6 @@
 import pygame
 import sys
+from starfield import Starfield
 from constants import *
 from logger import log_state, log_event
 from player import Player
@@ -29,6 +30,8 @@ def main():
     Player.containers = (updatable, drawable)
     player = Player(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2)
 
+    stars = Starfield(200)
+
     while True:
 
         for event in pygame.event.get():
@@ -49,7 +52,7 @@ def main():
                     shot.kill()
                     asteroid.split()
 
-        screen.fill("black")
+        stars.draw(screen)
         for obj in drawable:
             obj.draw(screen)
         pygame.display.flip()
