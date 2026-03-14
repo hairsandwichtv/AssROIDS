@@ -4,11 +4,20 @@ from circleshape import CircleShape
 from constants import LINE_WIDTH, ASTEROID_MIN_RADIUS
 from logger import log_event
 
+BUTT_IMG = pygame.image.load("butt.png")
+POOP_IMG = pygame.image.load("poop.png")
+
 class Asteroid(CircleShape):
     def __init__(self, x, y, radius):
         super().__init__(x, y, radius)
+
+        base_img = POOP_IMG if radius <= ASTEROID_MIN_RADIUS else BUTT_IMG
+        size = int(radius * 2)
+        self.image = pygame.transform.scale(base_img, (size, size))
+
     def draw(self, screen):
-        pygame.draw.circle(screen, "white", self.position, self.radius, LINE_WIDTH)
+        render_pos = (self.position.x - self.radius, self.position.y - self.radius)
+        screen.blit(self.image, render_pos)
 
     def update(self, dt):
         self.position += (self.velocity * dt)
