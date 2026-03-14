@@ -13,14 +13,22 @@ class Asteroid(CircleShape):
 
         base_img = POOP_IMG if radius <= ASTEROID_MIN_RADIUS else BUTT_IMG
         size = int(radius * 2)
-        self.image = pygame.transform.scale(base_img, (size, size))
+        self.original_image = pygame.transform.scale(base_img, (size, size))
+        self.image = self.original_image
+        self.angle = random.uniform(0, 360)
+        self.rotation_speed = 0
 
     def draw(self, screen):
-        render_pos = (self.position.x - self.radius, self.position.y - self.radius)
-        screen.blit(self.image, render_pos)
+        rotated_image = pygame.transform.rotate(self.original_image, self.angle)
+        new_rect = rotated_image.get_rect(center=(self.position.x, self.position.y))
+        screen.blit(rotated_image, new_rect.topleft)
 
     def update(self, dt):
         self.position += (self.velocity * dt)
+        if self.radius <= ASTEROID_MIN_RADIUS:
+            speed = self.velocity.length()
+            self.angle += speed * dt * 2
+            self.angle %= 360
 
     def split(self):
         self.kill()
