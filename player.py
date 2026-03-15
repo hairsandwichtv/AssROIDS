@@ -54,3 +54,7 @@ class Player(CircleShape):
             self.move(dt)
         if keys[pygame.K_s]:
             self.move(-dt)
+        if self.position.x < self.radius: self.position.x = self.radius
+        if self.position.x > 1280 - self.radius: self.position.x = 1280 - self.radius
+        if self.position.y < self.radius: self.position.y = self.radius
+        if self.position.y > 720 - self.radius: self.position.y = 720 - self.radius
