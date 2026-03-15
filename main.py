@@ -46,9 +46,15 @@ def main():
         pygame.mixer.music.load("Ass Roids Menu Song.mp3")
         pygame.mixer.music.set_volume(0.66)
         pygame.mixer.music.play(-1)
-        tick_sound = pygame.mixer.Sound("Button Tick.mp3")
+        tick_sound       = pygame.mixer.Sound("Button Tick.mp3")
+        gun_sound        = pygame.mixer.Sound("Main Gun Sound.mp3")
+        poop_splat_sound = pygame.mixer.Sound("Poop Splat.mp3")
+        butt_smack_sound = pygame.mixer.Sound("Butt Smack.mp3")
+        boss_enter_sound = pygame.mixer.Sound("Boss Enter Cluck.mp3")
+        boss_death_sound = pygame.mixer.Sound("Boss Death FX.mp3")
     else:
-        tick_sound = None
+        tick_sound = gun_sound = poop_splat_sound = None
+        butt_smack_sound = boss_enter_sound = boss_death_sound = None
  
     start_btn = Button(int(1280 * 0.10), 570, "Blast Off Button.png", 0.5)
     exit_btn = Button(int(1280 * 0.90), 570, "Exit Button.png", 0.5)
@@ -104,6 +110,12 @@ def main():
                 asteroid_field = AsteroidField()
                 state = "GAME"
  
+                # Start ambient game music at 50% volume
+                if audio_enabled:
+                    pygame.mixer.music.load("Space Amb.mp3")
+                    pygame.mixer.music.set_volume(0.50)
+                    pygame.mixer.music.play(-1)
+ 
             if exit_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
                 pygame.quit()
                 sys.exit()
@@ -114,6 +126,7 @@ def main():
             if keys[pygame.K_SPACE]:
                 if player.shoot():
                     total_shots_fired += 1
+                    if audio_enabled: gun_sound.play()
  
             # 2. Update all objects
             for obj in updatable:
@@ -126,6 +139,7 @@ def main():
                 new_boss = Boss(640, -100, boss_hp) # Spawn off-screen top
                 new_boss.velocity = pygame.Vector2(random.uniform(-150, 150), 200)
                 butts_busted = 0 # Reset bar immediately
+                if audio_enabled: boss_enter_sound.play()
  
             # 4. Boss AI (Face the player)
             for boss in bosses:
@@ -146,7 +160,10 @@ def main():
                 # Check Boss vs Player collision
                 if boss.collides_with(player):
                     state = "MENU"
-                    if audio_enabled: pygame.mixer.music.play(-1)
+                    if audio_enabled:
+                        pygame.mixer.music.load("Ass Roids Menu Song.mp3")
+                        pygame.mixer.music.set_volume(0.66)
+                        pygame.mixer.music.play(-1)
  
                 for shot in shots:
                     if boss.collides_with(shot):
@@ -154,7 +171,8 @@ def main():
                         total_shots_fired -= 1
                         shot.kill()
                         if boss.take_damage():
-                            # Boss died — trigger screen shake
+                            # Boss died — play death sound and trigger screen shake
+                            if audio_enabled: boss_death_sound.play()
                             shake_timer = SHAKE_DURATION
  
                             # Clear all asteroids on screen
@@ -175,13 +193,19 @@ def main():
             for asteroid in asteroids:
                 if asteroid.collides_with(player):
                     state = "MENU"
-                    if audio_enabled: pygame.mixer.music.play(-1)
+                    if audio_enabled:
+                        pygame.mixer.music.load("Ass Roids Menu Song.mp3")
+                        pygame.mixer.music.set_volume(0.66)
+                        pygame.mixer.music.play(-1)
                 
                 for shot in shots:
                     if asteroid.collides_with(shot):
                         butts_busted += 1
                         if asteroid.radius <= ASTEROID_MIN_RADIUS:
                             score += 1
+                            if audio_enabled: poop_splat_sound.play()
+                        else:
+                            if audio_enabled: butt_smack_sound.play()
                         shot.kill()
                         asteroid.split()
  
