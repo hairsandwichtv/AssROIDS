@@ -3,7 +3,7 @@ import random
 from constants import SCREEN_WIDTH, SCREEN_HEIGHT
 
 class Starfield:
-    def __init__(self, num_stars=150):
+    def __init__(self, width, height, num_stars=150):
         # Create a transparent surface the size of the screen
         self.surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.surface.fill("black")
