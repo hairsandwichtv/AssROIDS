@@ -11,26 +11,27 @@ from button import Button
 
 def main():
     pygame.init()
+    
+    # WSL Audio Fail-safe
+    audio_enabled = True
     try:
         pygame.mixer.init()
-        audio_enabled = True
     except pygame.error:
+        print("Warning: No audio device found. Running in silent mode.")
         audio_enabled = False
 
-    # 1. FIXED BORDERS: Use RESIZABLE. 
-    # Do not call set_mode repeatedly unless flags change; 
-    # this often causes Linux/WSL borders to vanish.
+    # FIX: Set caption BEFORE set_mode to help WSLg decorations
+    pygame.display.set_caption("AssROIDS")
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
     
-    # 2. ASPECT RATIO LOCK: Create a virtual "Internal Surface"
-    # We draw everything here first at 1280x720
+    # 16:9 Internal Canvas
     internal_res = (1280, 720)
     internal_surf = pygame.Surface(internal_res)
 
     clock = pygame.time.Clock()
     dt = 0
 
-    # Load Assets
+    # Assets
     menu_bg_original = pygame.image.load("AssROIDS Menu BG.png").convert()
     menu_bg = pygame.transform.scale(menu_bg_original, internal_res)
     
@@ -39,11 +40,10 @@ def main():
         pygame.mixer.music.set_volume(0.66)
         pygame.mixer.music.play(-1)
         tick_sound = pygame.mixer.Sound("Button Tick.mp3")
-        tick_sound.set_volume(0.85)
     else:
         tick_sound = None
 
-    # Buttons are placed relative to the INTERNAL 1280x720 resolution
+    # Use internal resolution (1280x720) for positioning
     start_btn = Button(int(1280 * 0.10), 570, "Blast Off Button.png", 0.5)
     exit_btn = Button(int(1280 * 0.90), 570, "Exit Button.png", 0.5)
     stars = Starfield(1280, 720, 200)
@@ -55,29 +55,28 @@ def main():
     shots = pygame.sprite.Group()
 
     while True:
-        # Handle Events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
             
-            # Update the window size variable without recreating the whole screen constantly
+            # Update physical window size variable
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
 
-        # Clear internal surface
+        # 1. Update/Draw to Internal Surface (Always 1280x720)
         internal_surf.fill("black")
 
         if state == "MENU":
             internal_surf.blit(menu_bg, (0, 0))
-            # Use internal_surf for drawing and mouse logic
+            # We pass is_internal=True to remap mouse coords in button.py
             if start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
                 if audio_enabled: pygame.mixer.music.stop()
                 updatable.empty()
                 drawable.empty()
                 asteroids.empty()
                 shots.empty()
-
+                
                 Shot.containers = (shots, updatable, drawable)
                 Asteroid.containers = (asteroids, updatable, drawable)
                 AsteroidField.containers = (updatable)
@@ -94,7 +93,6 @@ def main():
         elif state == "GAME":
             for obj in updatable:
                 obj.update(dt)
-
             for asteroid in asteroids:
                 if asteroid.collides_with(player):
                     state = "MENU"
@@ -103,32 +101,29 @@ def main():
                     if asteroid.collides_with(shot):
                         shot.kill()
                         asteroid.split()
-
             stars.draw(internal_surf)
             for obj in drawable:
                 obj.draw(internal_surf)
 
-        # 3. FINAL SCALE: Calculate 16:9 Letterboxing
+        # 2. Scale Internal Surface to Window (Letterboxing)
         win_w, win_h = screen.get_size()
-        aspect_ratio = 1280 / 720
+        target_ratio = 1280 / 720
         
-        if win_w / win_h > aspect_ratio:
-            # Window is too wide (add side bars)
+        if win_w / win_h > target_ratio:
             scale_h = win_h
-            scale_w = int(win_h * aspect_ratio)
+            scale_w = int(win_h * target_ratio)
         else:
-            # Window is too tall (add top/bottom bars)
             scale_w = win_w
-            scale_h = int(win_w / aspect_ratio)
+            scale_h = int(win_w / target_ratio)
 
-        scaled_surf = pygame.transform.scale(internal_surf, (scale_w, scale_h))
+        scaled_view = pygame.transform.scale(internal_surf, (scale_w, scale_h))
         
-        # Center the scaled surface on the actual screen
-        gap_x = (win_w - scale_w) // 2
-        gap_y = (win_h - scale_h) // 2
+        # Center the view
+        offset_x = (win_w - scale_w) // 2
+        offset_y = (win_h - scale_h) // 2
         
-        screen.fill((0, 0, 0)) # Fill black bars
-        screen.blit(scaled_surf, (gap_x, gap_y))
+        screen.fill("black")
+        screen.blit(scaled_view, (offset_x, offset_y))
 
         pygame.display.flip()
         dt = clock.tick(60) / 1000
