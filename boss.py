@@ -3,9 +3,10 @@ import math
 import random
 from circleshape import CircleShape
 from constants import LINE_WIDTH
+from asset_helper import asset_path
 
 # Load the boss image once
-BOSS_IMG = pygame.image.load("Dick Butt Boss.png")
+BOSS_IMG = pygame.image.load(asset_path("Dick Butt Boss.png"))
 
 class Boss(CircleShape):
     def __init__(self, x, y, health):

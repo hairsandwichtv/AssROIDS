@@ -3,9 +3,10 @@ import random
 from circleshape import CircleShape
 from constants import LINE_WIDTH, ASTEROID_MIN_RADIUS
 from logger import log_event
+from asset_helper import asset_path
 
-BUTT_IMG = pygame.image.load("butt.png")
-POOP_IMG = pygame.image.load("poop.png")
+BUTT_IMG = pygame.image.load(asset_path("butt.png"))
+POOP_IMG = pygame.image.load(asset_path("poop.png"))
 
 class Asteroid(CircleShape):
     def __init__(self, x, y, radius):

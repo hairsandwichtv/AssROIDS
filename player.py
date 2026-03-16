@@ -1,11 +1,12 @@
 import pygame
 from circleshape import CircleShape
 from shot import Shot
+from asset_helper import asset_path
 from constants import (PLAYER_RADIUS, LINE_WIDTH, PLAYER_TURN_SPEED, PLAYER_SPEED,
                        PLAYER_SHOT_SPEED, SHOT_RADIUS, PLAYER_SHOT_COOLDOWN_SECONDS)
 
-SHIP_IMG   = pygame.image.load("ship.png")
-SHIELD_IMG = pygame.image.load("ship_w_shield.png")
+SHIP_IMG   = pygame.image.load(asset_path("ship.png"))
+SHIELD_IMG = pygame.image.load(asset_path("ship_w_shield.png"))
 
 MILK_BEAM_DURATION  = 15.0   # seconds the milk beam lasts
 INVINCIBLE_DURATION = 1.5    # seconds of invincibility after shield is consumed

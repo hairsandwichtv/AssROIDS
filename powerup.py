@@ -1,9 +1,10 @@
 import pygame
 import random
 from circleshape import CircleShape
+from asset_helper import asset_path
 
-CONDOM_IMG = pygame.image.load("Condom Power Up Icon.png")
-ZINC_IMG   = pygame.image.load("Zinc Tab Power Up Icon.png")
+CONDOM_IMG = pygame.image.load(asset_path("Condom Power Up Icon.png"))
+ZINC_IMG   = pygame.image.load(asset_path("Zinc Tab Power Up Icon.png"))
 
 POWERUP_SIZE = 44  # diameter of the icon
 

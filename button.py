@@ -1,4 +1,5 @@
 import pygame
+from asset_helper import asset_path
 
 class Button:
     def __init__(self, x, y, image_path, scale):

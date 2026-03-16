@@ -1,0 +1,58 @@
+name: Build AssROIDS Installer
+
+on:
+  push:
+    tags:
+      - 'v*'   # triggers on any tag like v1.0, v1.1, v2.0 etc
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Check out your code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 3. Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pygame==2.6.1
+          pip install pyinstaller
+
+      # 4. Build the exe with PyInstaller
+      - name: Build with PyInstaller
+        run: pyinstaller assroids.spec
+
+      # 5. Install Inno Setup
+      - name: Install Inno Setup
+        run: choco install innosetup --yes
+
+      # 6. Compile the installer
+      - name: Compile installer
+        run: iscc assroids_installer.iss
+
+      # 7. Create a GitHub Release and upload the installer
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AssROIDS ${{ github.ref_name }}
+          body: |
+            ## AssROIDS ${{ github.ref_name }}
+
+            Download and run **AssROIDS_Setup.exe** to install the game.
+
+            ### What's included
+            - Full game with installer
+            - Desktop shortcut (optional)
+            - README included in install directory
+          files: installer_output/AssROIDS_Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
