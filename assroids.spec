@@ -59,7 +59,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,       # no terminal window when launched
-    icon='butt.png',     # swap for a proper .ico file if you have one
+    icon=None,           # add a proper .ico file here later if desired
 )
 
 coll = COLLECT(
