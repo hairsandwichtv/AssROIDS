@@ -12,6 +12,7 @@ INVINCIBLE_DURATION = 1.5    # seconds of invincibility after shield is consumed
 
 
 class Player(CircleShape):
+    shoot_key = pygame.K_SPACE  # rebindable from settings menu
     def __init__(self, x, y):
         super().__init__(x, y, PLAYER_RADIUS)
         self.rotation = 0
@@ -98,7 +99,7 @@ class Player(CircleShape):
 
         # Beam firing state — main.py reads this every frame
         keys = pygame.key.get_pressed()
-        self.is_firing_beam = self.milk_beam_active and keys[pygame.K_SPACE]
+        self.is_firing_beam = self.milk_beam_active and keys[Player.shoot_key]
 
         # Movement
         if keys[pygame.K_a]: self.rotate(-dt)

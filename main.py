@@ -1,5 +1,8 @@
 import pygame
 import sys
+import os
+import json
+import subprocess
 import math
 import random
 from starfield import Starfield
@@ -24,6 +27,111 @@ BEAM_LENGTH          = 650    # pixels the beam extends
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def open_readme():
+    """Open README_GAME.md in the system default text editor."""
+    linux_path = os.path.abspath("README_GAME.md")
+    try:
+        # Convert Linux path to Windows path and open via PowerShell (WSL)
+        win_path = subprocess.check_output(["wslpath", "-w", linux_path]).decode().strip()
+        subprocess.Popen(["powershell.exe", "-Command", f'Start-Process "{win_path}"'])
+    except Exception:
+        try:
+            subprocess.Popen(["xdg-open", linux_path])
+        except Exception:
+            pass  # silently fail rather than crash the game
+
+SETTINGS_FILE = "settings.json"
+DEFAULT_SETTINGS = {
+    "master_volume":   1.0,
+    "mute_menu_song":  False,
+    "shoot_key":       pygame.K_SPACE,
+}
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            data = json.load(f)
+            # Fill in any missing keys with defaults
+            for k, v in DEFAULT_SETTINGS.items():
+                data.setdefault(k, v)
+            return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return DEFAULT_SETTINGS.copy()
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+
+def apply_settings(settings, audio_enabled, all_sounds, in_game=False):
+    """Apply volume and mute settings to all audio."""
+    if not audio_enabled:
+        return
+    vol = settings["master_volume"]
+    for snd in all_sounds:
+        if snd:
+            snd.set_volume(vol)
+    if in_game:
+        pygame.mixer.music.set_volume(0.45 * vol)
+    else:
+        if settings["mute_menu_song"]:
+            pygame.mixer.music.set_volume(0)
+        else:
+            pygame.mixer.music.set_volume(0.66 * vol)
+    Player.shoot_key = settings["shoot_key"]
+
+def draw_settings_menu(surface, settings, font, small_font, waiting_for_key):
+    """Draw the settings overlay panel. Returns slider_rect for click handling."""
+    # Dark overlay
+    overlay = pygame.Surface((1280, 720), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 180))
+    surface.blit(overlay, (0, 0))
+
+    # Panel
+    panel_rect = pygame.Rect(340, 140, 600, 420)
+    pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=12)
+    pygame.draw.rect(surface, (255, 255, 255), panel_rect, 2, border_radius=12)
+
+    # Title
+    title = font.render("SETTINGS", True, (255, 215, 0))
+    surface.blit(title, (640 - title.get_width() // 2, 160))
+
+    # --- Master Volume ---
+    vol_label = small_font.render("MASTER VOLUME", True, "white")
+    surface.blit(vol_label, (380, 230))
+
+    slider_bg   = pygame.Rect(380, 260, 520, 16)
+    slider_fill = pygame.Rect(380, 260, int(520 * settings["master_volume"]), 16)
+    slider_knob_x = 380 + int(520 * settings["master_volume"])
+    pygame.draw.rect(surface, (80, 80, 80),    slider_bg,   border_radius=8)
+    pygame.draw.rect(surface, (0, 200, 100),   slider_fill, border_radius=8)
+    pygame.draw.circle(surface, "white", (slider_knob_x, 268), 10)
+    pct_txt = small_font.render(f"{int(settings['master_volume'] * 100)}%", True, "white")
+    surface.blit(pct_txt, (910, 255))
+
+    # --- Mute Menu Song ---
+    mute_label = small_font.render("MUTE MENU SONG", True, "white")
+    surface.blit(mute_label, (380, 320))
+    box_rect = pygame.Rect(820, 318, 22, 22)
+    pygame.draw.rect(surface, "white", box_rect, border_radius=3)
+    if settings["mute_menu_song"]:
+        pygame.draw.rect(surface, (0, 200, 100), box_rect.inflate(-6, -6), border_radius=2)
+
+    # --- Shoot Keybind ---
+    bind_label = small_font.render("SHOOT KEY", True, "white")
+    surface.blit(bind_label, (380, 390))
+    key_name  = pygame.key.name(settings["shoot_key"]).upper()
+    bind_text = "[ PRESS ANY KEY ]" if waiting_for_key else f"[ {key_name} ]"
+    bind_color = (255, 215, 0) if waiting_for_key else (100, 200, 255)
+    bind_surf = small_font.render(bind_text, True, bind_color)
+    bind_rect = bind_surf.get_rect(topleft=(680, 390))
+    surface.blit(bind_surf, bind_rect.topleft)
+
+    # --- ESC hint ---
+    esc_txt = small_font.render("ESC  —  Close Settings", True, (150, 150, 150))
+    surface.blit(esc_txt, (640 - esc_txt.get_width() // 2, 510))
+
+    return slider_bg, box_rect, bind_rect
+
 def load_high_score():
     try:
         with open(HIGHSCORE_FILE, "r") as f:
@@ -138,9 +246,26 @@ def main():
          swoosh_sound, rubber_pop_sound, gulp_sound,
          milk_beam_sound, dick_sus_sound) = (None,) * 12
 
-    start_btn = Button(int(1280 * 0.10), 570, "Blast Off Button.png", 0.5)
-    exit_btn  = Button(int(1280 * 0.90), 570, "Exit Button.png",      0.5)
-    stars     = Starfield(1280, 720, 200)
+    all_sounds_list = [
+        tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
+        butt_smack_sound, boss_enter_sound, boss_death_sound,
+        swoosh_sound, rubber_pop_sound, gulp_sound,
+        milk_beam_sound, dick_sus_sound
+    ]
+
+    start_btn    = Button(int(1280 * 0.10), 570, "Blast Off Button.png", 0.5)
+    exit_btn     = Button(int(1280 * 0.90), 570, "Exit Button.png",      0.5)
+    readme_btn   = Button(133,              150, "READ ME Button.png",   0.5)
+    settings_btn = Button(int(1280 * 0.90), 150, "Settings Button.png",  0.5)
+    stars        = Starfield(1280, 720, 200)
+
+    # Load persisted settings and apply
+    settings = load_settings()
+    apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
+
+    # Settings menu state
+    settings_open    = False
+    waiting_for_key  = False
 
     # Game state
     state             = "MENU"
@@ -182,6 +307,48 @@ def main():
                 sys.exit()
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+
+            # Settings: keybind capture
+            if settings_open and waiting_for_key and event.type == pygame.KEYDOWN:
+                if event.key != pygame.K_ESCAPE:
+                    settings["shoot_key"] = event.key
+                    Player.shoot_key = event.key
+                    save_settings(settings)
+                waiting_for_key = False
+
+            # Settings: close on ESC
+            if settings_open and event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                settings_open = False
+                save_settings(settings)
+
+            # Settings: slider and toggle mouse clicks
+            if settings_open and not waiting_for_key and event.type == pygame.MOUSEBUTTONDOWN:
+                # Remap mouse to internal coords
+                win_w, win_h = screen.get_size()
+                aspect = 1280 / 720
+                if win_w / win_h > aspect:
+                    sc = win_h / 720; ox = (win_w - 1280 * sc) / 2; oy = 0
+                else:
+                    sc = win_w / 1280; ox = 0; oy = (win_h - 720 * sc) / 2
+                mx = (pygame.mouse.get_pos()[0] - ox) / sc
+                my = (pygame.mouse.get_pos()[1] - oy) / sc
+
+                slider_area = pygame.Rect(380, 250, 520, 36)
+                mute_box    = pygame.Rect(820, 318, 22, 22)
+                bind_area   = pygame.Rect(680, 383, 250, 34)
+
+                if slider_area.collidepoint(mx, my):
+                    settings["master_volume"] = max(0.0, min(1.0, (mx - 380) / 520))
+                    apply_settings(settings, audio_enabled, all_sounds_list,
+                                   in_game=(state == "GAME"))
+                    save_settings(settings)
+                elif mute_box.collidepoint(mx, my):
+                    settings["mute_menu_song"] = not settings["mute_menu_song"]
+                    apply_settings(settings, audio_enabled, all_sounds_list,
+                                   in_game=(state == "GAME"))
+                    save_settings(settings)
+                elif bind_area.collidepoint(mx, my):
+                    waiting_for_key = True
 
         internal_surf.fill("black")
 
@@ -238,9 +405,20 @@ def main():
                     pygame.mixer.music.set_volume(0.45)
                     pygame.mixer.music.play(-1)
 
+            if readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
+                open_readme()
+
+            if settings_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
+                settings_open = not settings_open
+                waiting_for_key = False
+
             if exit_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
                 pygame.quit()
                 sys.exit()
+
+            # Draw settings overlay on top of everything if open
+            if settings_open:
+                draw_settings_menu(internal_surf, settings, font, small_font, waiting_for_key)
 
         # ===================================================================
         # GAME STATE
@@ -249,7 +427,7 @@ def main():
 
             # 1. Handle Input ------------------------------------------------
             keys = pygame.key.get_pressed()
-            if keys[pygame.K_SPACE]:
+            if keys[Player.shoot_key]:
                 if player.milk_beam_active:
                     pass  # beam handled via player.is_firing_beam
                 else:
