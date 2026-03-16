@@ -1,18 +1,30 @@
 import inspect
 import json
 import math
+import os
+import sys
 from datetime import datetime
 
 __all__ = ["log_state", "log_event"]
 
 _FPS = 60
 _MAX_SECONDS = 16
-_SPRITE_SAMPLE_LIMIT = 10  # Maximum number of sprites to log per group
+_SPRITE_SAMPLE_LIMIT = 10
 
 _frame_count = 0
 _state_log_initialized = False
 _event_log_initialized = False
 _start_time = datetime.now()
+
+
+def _log_path(filename):
+    """Return a writable path for log files — uses APPDATA when frozen."""
+    if getattr(sys, "frozen", False):
+        base = os.path.join(os.environ.get("APPDATA", os.path.dirname(sys.executable)), "AssROIDS")
+        os.makedirs(base, exist_ok=True)
+    else:
+        base = os.path.abspath(".")
+    return os.path.join(base, filename)
 
 
 def log_state():
@@ -109,7 +121,7 @@ def log_state():
 
     # New log file on each run
     mode = "w" if not _state_log_initialized else "a"
-    with open("game_state.jsonl", mode) as f:
+    with open(_log_path("game_state.jsonl"), mode) as f:
         f.write(json.dumps(entry) + "\n")
 
     _state_log_initialized = True
@@ -129,7 +141,7 @@ def log_event(event_type, **details):
     }
 
     mode = "w" if not _event_log_initialized else "a"
-    with open("game_events.jsonl", mode) as f:
+    with open(_log_path("game_events.jsonl"), mode) as f:
         f.write(json.dumps(event) + "\n")
 
     _event_log_initialized = True

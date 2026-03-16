@@ -35,9 +35,11 @@ def asset_path(filename):
     return os.path.join(base, filename)
 
 def writable_path(filename):
-    """Correct path for files that must persist (scores, settings) — next to the exe."""
+    """Correct path for files that must persist (scores, settings).
+    Uses %APPDATA%\\AssROIDS when frozen so Windows doesn't block writes."""
     if getattr(sys, "frozen", False):
-        base = os.path.dirname(sys.executable)
+        base = os.path.join(os.environ.get("APPDATA", os.path.dirname(sys.executable)), "AssROIDS")
+        os.makedirs(base, exist_ok=True)
     else:
         base = os.path.abspath(".")
     return os.path.join(base, filename)
