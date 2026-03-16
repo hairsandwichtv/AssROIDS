@@ -59,7 +59,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,       # no terminal window when launched
-    icon=None,           # add a proper .ico file here later if desired
+    icon='AssROIDS ICON.ico',
 )
 
 coll = COLLECT(
