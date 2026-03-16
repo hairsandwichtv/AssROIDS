@@ -145,6 +145,7 @@ def main():
     # Game state
     state             = "MENU"
     score             = 0
+    spice_score       = 0   # tracks only shot-earned points for spice calculation
     butts_busted      = 0
     total_shots_fired = 0
     high_score        = load_high_score()
@@ -206,6 +207,7 @@ def main():
                 asteroids.empty(); shots.empty()
                 bosses.empty();    powerups.empty()
                 score             = 0
+                spice_score       = 0
                 butts_busted      = 0
                 total_shots_fired = 0
                 shake_timer       = 0.0
@@ -269,12 +271,12 @@ def main():
 
             # Detect milk beam expiry — resync spice baseline so it can rise again
             if prev_milk_beam_active and not player.milk_beam_active:
-                total_shots_fired = max(total_shots_fired, score)
+                total_shots_fired = max(total_shots_fired, spice_score)
             prev_milk_beam_active = player.milk_beam_active
 
             # 4. Boss Spawning -----------------------------------------------
             if butts_busted >= 50:
-                spice_level = max(0, total_shots_fired - score)
+                spice_level = max(0, total_shots_fired - spice_score)
                 boss_hp     = 9 + (spice_level // 2)
                 new_boss    = Boss(640, -100, boss_hp)
                 new_boss.velocity = pygame.Vector2(random.uniform(-150, 150), 200)
@@ -339,8 +341,8 @@ def main():
                             if audio_enabled: boss_death_sound.play()
                             shake_timer = SHAKE_DURATION
                             # Ramp up difficulty — affects all future spawns
-                            AsteroidField.speed_multiplier      *= 1.02
-                            AsteroidField.spawn_rate_multiplier *= 1.02
+                            AsteroidField.speed_multiplier      *= 1.03
+                            AsteroidField.spawn_rate_multiplier *= 1.03
                             for asteroid in list(asteroids):
                                 if asteroid.radius <= ASTEROID_MIN_RADIUS:
                                     score += 1
@@ -348,7 +350,7 @@ def main():
                                 else:
                                     asteroid.split()
                             for asteroid in asteroids:
-                                asteroid.velocity *= 1.02
+                                asteroid.velocity *= 1.03
 
             # 9. Milk Beam Damage --------------------------------------------
             if player.is_firing_beam:
@@ -362,6 +364,7 @@ def main():
                             if asteroid.radius > ASTEROID_MIN_RADIUS:
                                 butts_busted += 1
                             score += 1
+                            spice_score += 1  # beam kills count toward spice reduction
                             if asteroid.radius <= ASTEROID_MIN_RADIUS:
                                 if audio_enabled: poop_splat_sound.play()
                             else:
@@ -375,8 +378,8 @@ def main():
                                 if audio_enabled: boss_death_sound.play()
                                 shake_timer = SHAKE_DURATION
                                 # Ramp up difficulty — affects all future spawns
-                                AsteroidField.speed_multiplier      *= 1.02
-                                AsteroidField.spawn_rate_multiplier *= 1.02
+                                AsteroidField.speed_multiplier      *= 1.03
+                                AsteroidField.spawn_rate_multiplier *= 1.03
                                 for asteroid in list(asteroids):
                                     if asteroid.radius <= ASTEROID_MIN_RADIUS:
                                         score += 1
@@ -384,7 +387,7 @@ def main():
                                     else:
                                         asteroid.split()
                                 for asteroid in asteroids:
-                                    asteroid.velocity *= 1.02
+                                    asteroid.velocity *= 1.03
             else:
                 # Reset so beam fires instantly on next press
                 beam_damage_timer = 0.0
@@ -407,6 +410,7 @@ def main():
                             butts_busted += 1
                         if asteroid.radius <= ASTEROID_MIN_RADIUS:
                             score += 1
+                            spice_score += 1  # shot kills count toward spice calculation
                             if audio_enabled: poop_splat_sound.play()
                         else:
                             if audio_enabled: butt_smack_sound.play()
@@ -418,7 +422,7 @@ def main():
                 shake_timer -= dt
 
             # 12. UI Rendering -----------------------------------------------
-            spice_level = max(0, total_shots_fired - score)
+            spice_level = max(0, total_shots_fired - spice_score)
             stars.draw(internal_surf)
 
             # Draw milk beam behind sprites
