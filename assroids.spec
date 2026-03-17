@@ -36,6 +36,7 @@ a = Analysis(
         ('Gulp.mp3',                    '.'),
         ('Milk Beam SFX long.mp3',      '.'),
         ('Dick Butt Sus SFX.mp3',       '.'),
+        ('Thrusters SFX.mp3',           '.'),
     ],
     hiddenimports=[],
     hookspath=[],

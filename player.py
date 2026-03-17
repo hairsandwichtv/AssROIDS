@@ -8,12 +8,15 @@ from constants import (PLAYER_RADIUS, LINE_WIDTH, PLAYER_TURN_SPEED, PLAYER_SPEE
 SHIP_IMG   = pygame.image.load(asset_path("ship.png"))
 SHIELD_IMG = pygame.image.load(asset_path("ship_w_shield.png"))
 
-MILK_BEAM_DURATION  = 15.0   # seconds the milk beam lasts
-INVINCIBLE_DURATION = 1.5    # seconds of invincibility after shield is consumed
+MILK_BEAM_DURATION   = 15.0   # seconds the milk beam lasts
+INVINCIBLE_DURATION  = 1.5    # seconds of invincibility after shield is consumed
+THRUSTER_DURATION    = 1.0    # max seconds the boost lasts per use
+THRUSTER_RECHARGE    = 60.0   # base seconds to fully recharge from 0
 
 
 class Player(CircleShape):
     shoot_key = pygame.K_SPACE  # rebindable from settings menu
+
     def __init__(self, x, y):
         super().__init__(x, y, PLAYER_RADIUS)
         self.rotation = 0
@@ -24,11 +27,17 @@ class Player(CircleShape):
 
         # --- Power-up states ---
         self.has_shield       = False
-        self.invincible_timer = 0.0   # brief window after shield absorbs a hit
+        self.invincible_timer = 0.0
 
         self.milk_beam_active = False
         self.milk_beam_timer  = 0.0
-        self.is_firing_beam   = False  # read by main.py each frame
+        self.is_firing_beam   = False
+
+        # --- Thruster state ---
+        self.thruster_charge  = 1.0
+        self.thruster_active  = False
+        self.thruster_timer   = 0.0
+        self.thruster_locked  = False  # locked out until full recharge after hitting 0
 
     # ------------------------------------------------------------------
     # Power-up helpers
@@ -71,9 +80,10 @@ class Player(CircleShape):
     def rotate(self, dt):
         self.rotation += PLAYER_TURN_SPEED * dt
 
-    def move(self, dt):
+    def move(self, dt, boost=False):
         forward = pygame.Vector2(0, 1).rotate(self.rotation)
-        self.position += forward * PLAYER_SPEED * dt
+        speed   = PLAYER_SPEED * (2.0 if boost else 1.0)
+        self.position += forward * speed * dt
 
     def shoot(self):
         if self.timer > 0:
@@ -84,7 +94,7 @@ class Player(CircleShape):
         new_shot.velocity = velocity * PLAYER_SHOT_SPEED
         return True
 
-    def update(self, dt):
+    def update(self, dt, speed_multiplier=1.0):
         # Cooldown timers
         if self.timer > 0:
             self.timer -= dt
@@ -98,15 +108,42 @@ class Player(CircleShape):
                 self.milk_beam_active = False
                 self.milk_beam_timer  = 0.0
 
-        # Beam firing state — main.py reads this every frame
+        # Beam firing state
         keys = pygame.key.get_pressed()
         self.is_firing_beam = self.milk_beam_active and keys[Player.shoot_key]
 
+        # --- Thruster logic ---
+        shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+
+        if self.thruster_active:
+            # Drain proportionally — 1 full second depletes entire bar
+            self.thruster_charge = max(0.0, self.thruster_charge - dt / THRUSTER_DURATION)
+            self.thruster_timer  += dt
+            # Stop if shift released or bar fully drained
+            if not shift_held or self.thruster_charge <= 0.0:
+                self.thruster_active = False
+                self.thruster_timer  = 0.0
+                if self.thruster_charge <= 0.0:
+                    self.thruster_locked = True   # locked until fully recharged
+        else:
+            # Recharge — faster as hardness increases
+            if self.thruster_charge < 1.0:
+                recharge_rate = speed_multiplier / THRUSTER_RECHARGE
+                self.thruster_charge = min(1.0, self.thruster_charge + recharge_rate * dt)
+            # Unlock once fully recharged after hitting 0
+            if self.thruster_charge >= 1.0:
+                self.thruster_locked = False
+            # Activate if shift pressed, has charge, and not locked out
+            if shift_held and self.thruster_charge > 0.0 and not self.thruster_locked:
+                self.thruster_active = True
+                self.thruster_timer  = 0.0
+
         # Movement
+        boosting = self.thruster_active
         if keys[pygame.K_a]: self.rotate(-dt)
         if keys[pygame.K_d]: self.rotate(dt)
-        if keys[pygame.K_w]: self.move(dt)
-        if keys[pygame.K_s]: self.move(-dt)
+        if keys[pygame.K_w]: self.move(dt, boost=boosting)
+        if keys[pygame.K_s]: self.move(-dt, boost=boosting)
 
         # Screen clamping
         self.position.x = max(self.radius, min(self.position.x, 1280 - self.radius))

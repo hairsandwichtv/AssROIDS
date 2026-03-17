@@ -198,6 +198,37 @@ def draw_settings_menu(surface, settings, font, small_font, waiting_for_key):
     surface.blit(esc_txt, (640 - esc_txt.get_width() // 2, 510))
     return slider_bg, box_rect, bind_rect
 
+def draw_thruster_bar(surface, x, y, width, height, charge, active, locked, font, tick):
+    """Draw thruster bar with label inside, red->blue color shift, flash red when empty."""
+    # Color: interpolate red (255,0,0) → blue (0,160,220) based on charge
+    if locked:
+        # Flash red when locked out — alternates every 0.3s using tick
+        flash_on = (tick // 18) % 2 == 0
+        bar_color = (220, 0, 0) if flash_on else (100, 0, 0)
+    elif active:
+        bar_color = (0, 220, 255)   # bright cyan while boosting
+    else:
+        r = int(255 * (1.0 - charge))
+        g = 0
+        b = int(220 * charge)
+        bar_color = (r, g, b)
+
+    # Background
+    pygame.draw.rect(surface, (20, 30, 50), (x, y, width, height), border_radius=4)
+    # Fill
+    fill_w = max(0, int(width * charge))
+    if fill_w > 0:
+        pygame.draw.rect(surface, bar_color, (x, y, fill_w, height), border_radius=4)
+    # Metallic highlight strip (top quarter)
+    highlight_color = (min(bar_color[0] + 80, 255), min(bar_color[1] + 80, 255), min(bar_color[2] + 80, 255))
+    pygame.draw.rect(surface, highlight_color, (x, y, width, height // 4), border_radius=4)
+    # Border
+    pygame.draw.rect(surface, (60, 120, 200), (x, y, width, height), 2, border_radius=4)
+    # Label centered inside bar
+    label = font.render("THRUSTERS", True, "white")
+    surface.blit(label, (x + width // 2 - label.get_width() // 2,
+                         y + height // 2 - label.get_height() // 2))
+
 def go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel):
     if score > high_score:
         high_score = score
@@ -254,19 +285,20 @@ def main():
         gulp_sound       = pygame.mixer.Sound(asset_path("Gulp.mp3"))
         milk_beam_sound  = pygame.mixer.Sound(asset_path("Milk Beam SFX long.mp3"))
         dick_sus_sound   = pygame.mixer.Sound(asset_path("Dick Butt Sus SFX.mp3"))
+        thruster_sound   = pygame.mixer.Sound(asset_path("Thrusters SFX.mp3"))
         sus_channel      = pygame.mixer.Channel(6)
         beam_channel     = pygame.mixer.Channel(7)
     else:
         (tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
          butt_smack_sound, boss_enter_sound, boss_death_sound,
          swoosh_sound, rubber_pop_sound, gulp_sound,
-         milk_beam_sound, dick_sus_sound) = (None,) * 12
+         milk_beam_sound, dick_sus_sound, thruster_sound) = (None,) * 13
 
     all_sounds_list = [
         tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
         butt_smack_sound, boss_enter_sound, boss_death_sound,
         swoosh_sound, rubber_pop_sound, gulp_sound,
-        milk_beam_sound, dick_sus_sound
+        milk_beam_sound, dick_sus_sound, thruster_sound
     ]
 
     start_btn    = Button(int(1280 * 0.10), 570, asset_path("Blast Off Button.png"), 0.5)
@@ -295,6 +327,7 @@ def main():
     beam_damage_timer     = 0.0
     prev_firing_beam      = False
     prev_milk_beam_active = False
+    prev_thruster_active  = False
     sus_playing           = False
 
     updatable = pygame.sprite.Group()
@@ -374,6 +407,7 @@ def main():
                 beam_damage_timer     = 0.0
                 prev_firing_beam      = False
                 prev_milk_beam_active = False
+                prev_thruster_active  = False
                 sus_playing           = False
                 AsteroidField.speed_multiplier      = 1.0
                 AsteroidField.spawn_rate_multiplier = 1.0
@@ -420,14 +454,22 @@ def main():
                         if audio_enabled: gun_sound.play()
 
             for obj in updatable:
-                obj.update(dt)
+                if hasattr(obj, 'thruster_charge'):
+                    obj.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
+                else:
+                    obj.update(dt)
 
             if audio_enabled:
                 if player.is_firing_beam and not prev_firing_beam:
                     milk_beam_sound.play(loops=-1)
                 elif not player.is_firing_beam and prev_firing_beam:
                     milk_beam_sound.stop()
-            prev_firing_beam = player.is_firing_beam
+                if player.thruster_active and not prev_thruster_active:
+                    thruster_sound.play(loops=-1)
+                elif not player.thruster_active and prev_thruster_active:
+                    thruster_sound.stop()
+            prev_firing_beam     = player.is_firing_beam
+            prev_thruster_active = player.thruster_active
 
             if prev_milk_beam_active and not player.milk_beam_active:
                 total_shots_fired = max(total_shots_fired, spice_score)
@@ -565,9 +607,13 @@ def main():
             s_text = font.render(f"SCORE: {score}",             True, "white")
             h_text = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
             m_text = font.render(f"HARDNESS: {AsteroidField.speed_multiplier:.2f}x", True, (255, 100, 100))
-            internal_surf.blit(s_text, (20, 20))
+            internal_surf.blit(s_text, (20, 650))
             internal_surf.blit(h_text, (990, 80))
             internal_surf.blit(m_text, (20, 680))
+            draw_thruster_bar(internal_surf, 20, 20, 250, 22,
+                              player.thruster_charge, player.thruster_active,
+                              player.thruster_locked, small_font,
+                              pygame.time.get_ticks())
             draw_boss_sauce(internal_surf, 980, 50, 250, 25, butts_busted, font)
             hud_y = 50
             if player.has_shield:
