@@ -63,9 +63,57 @@ class Player(CircleShape):
     # ------------------------------------------------------------------
     # Sprite interface
     # ------------------------------------------------------------------
+    def _point_in_triangle(self, p, a, b, c):
+        """Return True if point p is inside triangle abc."""
+        def sign(p1, p2, p3):
+            return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
+        d1 = sign(p, a, b)
+        d2 = sign(p, b, c)
+        d3 = sign(p, c, a)
+        has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+        has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+        return not (has_neg and has_pos)
+
+    def _circle_intersects_segment(self, cx, cy, r, ax, ay, bx, by):
+        """Return True if circle (cx,cy,r) intersects line segment (ax,ay)-(bx,by)."""
+        dx, dy = bx - ax, by - ay
+        fx, fy = ax - cx, ay - cy
+        a = dx*dx + dy*dy
+        b = 2 * (fx*dx + fy*dy)
+        c = fx*fx + fy*fy - r*r
+        discriminant = b*b - 4*a*c
+        if discriminant < 0:
+            return False
+        discriminant = discriminant ** 0.5
+        t1 = (-b - discriminant) / (2*a)
+        t2 = (-b + discriminant) / (2*a)
+        return (0 <= t1 <= 1) or (0 <= t2 <= 1)
+
+    def collides_with(self, other):
+        """Triangle-circle collision: more accurate than circle-circle for the ship."""
+        # Broad phase first
+        broad_radius = self.radius + other.radius
+        if self.position.distance_squared_to(other.position) > broad_radius * broad_radius * 4:
+            return False
+        verts = self.triangle()
+        a, b, c = verts[0], verts[1], verts[2]
+        cx, cy, r = other.position.x, other.position.y, other.radius
+        cp = pygame.Vector2(cx, cy)
+        # 1. Circle center inside triangle
+        if self._point_in_triangle(cp, a, b, c):
+            return True
+        # 2. Circle intersects any edge
+        if self._circle_intersects_segment(cx, cy, r, a.x, a.y, b.x, b.y):
+            return True
+        if self._circle_intersects_segment(cx, cy, r, b.x, b.y, c.x, c.y):
+            return True
+        if self._circle_intersects_segment(cx, cy, r, c.x, c.y, a.x, a.y):
+            return True
+        return False
+
     def triangle(self):
         forward = pygame.Vector2(0, 1).rotate(self.rotation)
-        right   = pygame.Vector2(0, 1).rotate(self.rotation + 90) * self.radius / 1.5
+        right   = pygame.Vector2(0, 1).rotate(self.rotation + 90) * self.radius / 1.1
         a = self.position + forward * self.radius
         b = self.position - forward * self.radius - right
         c = self.position - forward * self.radius + right

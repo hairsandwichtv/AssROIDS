@@ -594,6 +594,7 @@ def main():
                             if audio_enabled: butt_smack_sound.play()
                         shot.kill()
                         asteroid.split()
+                        break  # asteroid is dead, stop checking more shots against it
 
             if shake_timer > 0:
                 shake_timer -= dt
@@ -602,8 +603,16 @@ def main():
             stars.draw(internal_surf)
             if player.is_firing_beam:
                 draw_milk_beam(internal_surf, player)
+            from circleshape import DEBUG_HITBOXES
             for obj in drawable:
                 obj.draw(internal_surf)
+                if DEBUG_HITBOXES and hasattr(obj, 'draw_debug'):
+                    if hasattr(obj, 'triangle'):
+                        # Player — draw triangle hitbox
+                        verts = obj.triangle()
+                        pygame.draw.polygon(internal_surf, (255, 0, 0), [(v.x, v.y) for v in verts], 1)
+                    else:
+                        obj.draw_debug(internal_surf)
             s_text = font.render(f"SCORE: {score}",             True, "white")
             h_text = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
             m_text = font.render(f"HARDNESS: {AsteroidField.speed_multiplier:.2f}x", True, (255, 100, 100))
