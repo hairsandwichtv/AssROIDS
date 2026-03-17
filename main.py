@@ -487,8 +487,8 @@ def main():
                         if boss.take_damage():
                             if audio_enabled: boss_death_sound.play()
                             shake_timer = SHAKE_DURATION
-                            AsteroidField.speed_multiplier      *= 1.03
-                            AsteroidField.spawn_rate_multiplier *= 1.03
+                            AsteroidField.speed_multiplier      *= 1.15
+                            AsteroidField.spawn_rate_multiplier *= 1.15
                             for asteroid in list(asteroids):
                                 if asteroid.radius <= ASTEROID_MIN_RADIUS:
                                     score += 1
@@ -496,7 +496,7 @@ def main():
                                 else:
                                     asteroid.split()
                             for asteroid in asteroids:
-                                asteroid.velocity *= 1.03
+                                asteroid.velocity *= 1.15
 
             if player.is_firing_beam:
                 beam_damage_timer -= dt
@@ -518,8 +518,8 @@ def main():
                             if boss.take_damage():
                                 if audio_enabled: boss_death_sound.play()
                                 shake_timer = SHAKE_DURATION
-                                AsteroidField.speed_multiplier      *= 1.03
-                                AsteroidField.spawn_rate_multiplier *= 1.03
+                                AsteroidField.speed_multiplier      *= 1.15
+                                AsteroidField.spawn_rate_multiplier *= 1.15
                                 for asteroid in list(asteroids):
                                     if asteroid.radius <= ASTEROID_MIN_RADIUS:
                                         score += 1
@@ -527,7 +527,7 @@ def main():
                                     else:
                                         asteroid.split()
                                 for asteroid in asteroids:
-                                    asteroid.velocity *= 1.03
+                                    asteroid.velocity *= 1.15
             else:
                 beam_damage_timer = 0.0
 
@@ -564,8 +564,10 @@ def main():
                 obj.draw(internal_surf)
             s_text = font.render(f"SCORE: {score}",             True, "white")
             h_text = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
+            m_text = font.render(f"HARDNESS: {AsteroidField.speed_multiplier:.2f}x", True, (255, 100, 100))
             internal_surf.blit(s_text, (20, 20))
             internal_surf.blit(h_text, (990, 80))
+            internal_surf.blit(m_text, (20, 680))
             draw_boss_sauce(internal_surf, 980, 50, 250, 25, butts_busted, font)
             hud_y = 50
             if player.has_shield:
