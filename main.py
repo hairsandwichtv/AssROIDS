@@ -15,6 +15,7 @@ from shot import Shot
 from button import Button
 from boss import Boss
 from powerup import PowerUp
+from circleshape import DEBUG_HITBOXES
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -228,6 +229,23 @@ def draw_thruster_bar(surface, x, y, width, height, charge, active, locked, font
     label = font.render("THRUSTERS", True, "white")
     surface.blit(label, (x + width // 2 - label.get_width() // 2,
                          y + height // 2 - label.get_height() // 2))
+
+def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
+                     boss_death_sound, shake_timer, SHAKE_DURATION):
+    """Shared logic for when any boss dies — clear field, boost speed, return updated score and shake_timer."""
+    if audio_enabled: boss_death_sound.play()
+    shake_timer = SHAKE_DURATION
+    AsteroidField.speed_multiplier      *= 1.15
+    AsteroidField.spawn_rate_multiplier *= 1.15
+    for asteroid in list(asteroids):
+        if asteroid.radius <= ASTEROID_MIN_RADIUS:
+            score += 1
+            asteroid.kill()
+        else:
+            asteroid.split()
+    for asteroid in asteroids:
+        asteroid.velocity *= 1.15
+    return score, shake_timer
 
 def go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel):
     if score > high_score:
@@ -453,10 +471,9 @@ def main():
                         total_shots_fired += 1
                         if audio_enabled: gun_sound.play()
 
+            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             for obj in updatable:
-                if hasattr(obj, 'thruster_charge'):
-                    obj.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
-                else:
+                if obj is not player:
                     obj.update(dt)
 
             if audio_enabled:
@@ -478,8 +495,22 @@ def main():
             if butts_busted >= 50:
                 spice_level = max(0, total_shots_fired - spice_score)
                 boss_hp     = 9 + (spice_level // 2)
-                new_boss    = Boss(640, -100, boss_hp)
-                new_boss.velocity = pygame.Vector2(random.uniform(-150, 150), 200)
+                # Pick a random off-screen spawn point on any edge
+                edge_choice = random.randint(0, 3)
+                if edge_choice == 0:   # top
+                    bx, by = random.randint(0, 1280), -100
+                    bvx, bvy = random.uniform(-150, 150), random.uniform(150, 250)
+                elif edge_choice == 1: # bottom
+                    bx, by = random.randint(0, 1280), 820
+                    bvx, bvy = random.uniform(-150, 150), random.uniform(-250, -150)
+                elif edge_choice == 2: # left
+                    bx, by = -100, random.randint(0, 720)
+                    bvx, bvy = random.uniform(150, 250), random.uniform(-150, 150)
+                else:                  # right
+                    bx, by = 1380, random.randint(0, 720)
+                    bvx, bvy = random.uniform(-250, -150), random.uniform(-150, 150)
+                new_boss = Boss(bx, by, boss_hp)
+                new_boss.velocity = pygame.Vector2(bvx, bvy)
                 butts_busted = 0
                 if audio_enabled:
                     boss_enter_sound.play()
@@ -495,7 +526,8 @@ def main():
             powerup_spawn_timer -= dt
             if powerup_spawn_timer <= 0:
                 powerup_spawn_timer = POWERUP_SPAWN_BASE + random.uniform(-5, 5)
-                PowerUp(random.choice(["condom", "zinc"]))
+                PowerUp(random.choice(["condom", "zinc", "dp"]))
+                powerup_spawn_timer = max(powerup_spawn_timer, 5.0)  # never less than 5s gap
 
             for powerup in list(powerups):
                 if powerup.collides_with(player):
@@ -507,6 +539,9 @@ def main():
                         if audio_enabled: swoosh_sound.play()
                     elif powerup.kind == "zinc":
                         player.activate_milk_beam()
+                        if audio_enabled: gulp_sound.play()
+                    elif powerup.kind == "dp":
+                        player.activate_dp()
                         if audio_enabled: gulp_sound.play()
                     powerup.kill()
 
@@ -522,23 +557,16 @@ def main():
                         high_score = go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel)
                         sus_playing = False
                         state = "MENU"
+                        break  # player is dead, stop processing bosses
                 for shot in list(shots):
                     if boss.collides_with(shot):
                         total_shots_fired -= 1
                         shot.kill()
                         if boss.take_damage():
-                            if audio_enabled: boss_death_sound.play()
-                            shake_timer = SHAKE_DURATION
-                            AsteroidField.speed_multiplier      *= 1.15
-                            AsteroidField.spawn_rate_multiplier *= 1.15
-                            for asteroid in list(asteroids):
-                                if asteroid.radius <= ASTEROID_MIN_RADIUS:
-                                    score += 1
-                                    asteroid.kill()
-                                else:
-                                    asteroid.split()
-                            for asteroid in asteroids:
-                                asteroid.velocity *= 1.15
+                            score, shake_timer = boss_death_clear(
+                                asteroids, score, audio_enabled,
+                                poop_splat_sound, boss_death_sound,
+                                shake_timer, SHAKE_DURATION)
 
             if player.is_firing_beam:
                 beam_damage_timer -= dt
@@ -558,18 +586,10 @@ def main():
                     for boss in list(bosses):
                         if beam_hits_circle(player, boss):
                             if boss.take_damage():
-                                if audio_enabled: boss_death_sound.play()
-                                shake_timer = SHAKE_DURATION
-                                AsteroidField.speed_multiplier      *= 1.15
-                                AsteroidField.spawn_rate_multiplier *= 1.15
-                                for asteroid in list(asteroids):
-                                    if asteroid.radius <= ASTEROID_MIN_RADIUS:
-                                        score += 1
-                                        asteroid.kill()
-                                    else:
-                                        asteroid.split()
-                                for asteroid in asteroids:
-                                    asteroid.velocity *= 1.15
+                                score, shake_timer = boss_death_clear(
+                                    asteroids, score, audio_enabled,
+                                    poop_splat_sound, boss_death_sound,
+                                    shake_timer, SHAKE_DURATION)
             else:
                 beam_damage_timer = 0.0
 
@@ -582,6 +602,7 @@ def main():
                         high_score = go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel)
                         sus_playing = False
                         state = "MENU"
+                        break  # player is dead, stop processing asteroids
                 for shot in list(shots):
                     if asteroid.collides_with(shot):
                         if asteroid.radius > ASTEROID_MIN_RADIUS:
@@ -603,7 +624,6 @@ def main():
             stars.draw(internal_surf)
             if player.is_firing_beam:
                 draw_milk_beam(internal_surf, player)
-            from circleshape import DEBUG_HITBOXES
             for obj in drawable:
                 obj.draw(internal_surf)
                 if DEBUG_HITBOXES and hasattr(obj, 'draw_debug'):
@@ -633,6 +653,11 @@ def main():
                 secs_left = math.ceil(player.milk_beam_timer)
                 beam_txt  = small_font.render(f"MILK BEAM: {secs_left}s", True, (200, 220, 255))
                 internal_surf.blit(beam_txt, (20, hud_y))
+                hud_y += 24
+            if player.dp_active:
+                secs_left = math.ceil(player.dp_timer)
+                dp_txt = small_font.render(f"DOUBLE SHOT: {secs_left}s", True, (184, 0, 0))
+                internal_surf.blit(dp_txt, (20, hud_y))
 
         # ===================================================================
         # Final Scaling / Letterboxing

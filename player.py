@@ -8,10 +8,11 @@ from constants import (PLAYER_RADIUS, LINE_WIDTH, PLAYER_TURN_SPEED, PLAYER_SPEE
 SHIP_IMG   = pygame.image.load(asset_path("ship.png"))
 SHIELD_IMG = pygame.image.load(asset_path("ship_w_shield.png"))
 
-MILK_BEAM_DURATION   = 15.0   # seconds the milk beam lasts
-INVINCIBLE_DURATION  = 1.5    # seconds of invincibility after shield is consumed
-THRUSTER_DURATION    = 1.0    # max seconds the boost lasts per use
-THRUSTER_RECHARGE    = 60.0   # base seconds to fully recharge from 0
+MILK_BEAM_DURATION   = 15.0
+INVINCIBLE_DURATION  = 1.5
+THRUSTER_DURATION    = 1.0
+THRUSTER_RECHARGE    = 60.0
+DP_DURATION          = 20.0  # seconds double-shot lasts
 
 
 class Player(CircleShape):
@@ -37,7 +38,11 @@ class Player(CircleShape):
         self.thruster_charge  = 1.0
         self.thruster_active  = False
         self.thruster_timer   = 0.0
-        self.thruster_locked  = False  # locked out until full recharge after hitting 0
+        self.thruster_locked  = False
+
+        # --- DP state ---
+        self.dp_active = False
+        self.dp_timer  = 0.0
 
     # ------------------------------------------------------------------
     # Power-up helpers
@@ -59,6 +64,13 @@ class Player(CircleShape):
     def activate_milk_beam(self):
         self.milk_beam_active = True
         self.milk_beam_timer  = MILK_BEAM_DURATION
+
+    def activate_dp(self):
+        """DP can — instant thruster refill + double shot for DP_DURATION seconds."""
+        self.dp_active        = True
+        self.dp_timer         = DP_DURATION
+        self.thruster_charge  = 1.0
+        self.thruster_locked  = False
 
     # ------------------------------------------------------------------
     # Sprite interface
@@ -136,10 +148,20 @@ class Player(CircleShape):
     def shoot(self):
         if self.timer > 0:
             return False
-        self.timer  = PLAYER_SHOT_COOLDOWN_SECONDS
-        new_shot    = Shot(self.position.x, self.position.y)
-        velocity    = pygame.Vector2(0, 1).rotate(self.rotation)
-        new_shot.velocity = velocity * PLAYER_SHOT_SPEED
+        self.timer   = PLAYER_SHOT_COOLDOWN_SECONDS
+        forward      = pygame.Vector2(0, 1).rotate(self.rotation)
+        velocity     = forward * PLAYER_SHOT_SPEED
+
+        if self.dp_active:
+            # Two shots offset left and right, tip of triangle sits between them
+            right  = pygame.Vector2(0, 1).rotate(self.rotation + 90) * (self.radius * 0.45)
+            shot_l = Shot(self.position.x - right.x, self.position.y - right.y)
+            shot_r = Shot(self.position.x + right.x, self.position.y + right.y)
+            shot_l.velocity = velocity
+            shot_r.velocity = velocity
+        else:
+            new_shot = Shot(self.position.x, self.position.y)
+            new_shot.velocity = velocity
         return True
 
     def update(self, dt, speed_multiplier=1.0):
@@ -155,6 +177,13 @@ class Player(CircleShape):
             if self.milk_beam_timer <= 0:
                 self.milk_beam_active = False
                 self.milk_beam_timer  = 0.0
+
+        # Tick DP duration
+        if self.dp_active:
+            self.dp_timer -= dt
+            if self.dp_timer <= 0:
+                self.dp_active = False
+                self.dp_timer  = 0.0
 
         # Beam firing state
         keys = pygame.key.get_pressed()

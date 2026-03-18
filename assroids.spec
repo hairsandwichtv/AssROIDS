@@ -21,6 +21,7 @@ a = Analysis(
         ('Dick Butt Boss.png',          '.'),
         ('Condom Power Up Icon.png',    '.'),
         ('Zinc Tab Power Up Icon.png',  '.'),
+        ('DP Can Icon.png',             '.'),
         # Audio
         ('Ass Roids Menu Song.mp3',     '.'),
         ('Space Amb.mp3',               '.'),
