@@ -230,6 +230,18 @@ def draw_thruster_bar(surface, x, y, width, height, charge, active, locked, font
     surface.blit(label, (x + width // 2 - label.get_width() // 2,
                          y + height // 2 - label.get_height() // 2))
 
+def player_death(score, high_score, audio_enabled, death_sound, death_sfx_length):
+    """Trigger player death — play SFX, save score, stop other audio.
+    Returns (high_score, death_freeze_timer) — caller sets state to DYING."""
+    if score > high_score:
+        high_score = score
+        save_high_score(high_score)
+    if audio_enabled:
+        pygame.mixer.stop()
+        pygame.mixer.music.stop()
+        death_sound.play()
+    return high_score, death_sfx_length
+
 def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
                      boss_death_sound, shake_timer, SHAKE_DURATION):
     """Shared logic for when any boss dies — clear field, boost speed, return updated score and shake_timer."""
@@ -246,17 +258,6 @@ def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
     for asteroid in asteroids:
         asteroid.velocity *= 1.15
     return score, shake_timer
-
-def go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel):
-    if score > high_score:
-        high_score = score
-        save_high_score(high_score)
-    if audio_enabled:
-        pygame.mixer.stop()
-        pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
-        pygame.mixer.music.set_volume(0.66)
-        pygame.mixer.music.play(-1)
-    return high_score
 
 # ---------------------------------------------------------------------------
 # Main
@@ -304,19 +305,22 @@ def main():
         milk_beam_sound  = pygame.mixer.Sound(asset_path("Milk Beam SFX long.mp3"))
         dick_sus_sound   = pygame.mixer.Sound(asset_path("Dick Butt Sus SFX.mp3"))
         thruster_sound   = pygame.mixer.Sound(asset_path("Thrusters SFX.mp3"))
+        death_sound      = pygame.mixer.Sound(asset_path("Player Death SFX.mp3"))
+        death_sfx_length = death_sound.get_length()  # seconds — used for freeze duration
         sus_channel      = pygame.mixer.Channel(6)
         beam_channel     = pygame.mixer.Channel(7)
     else:
         (tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
          butt_smack_sound, boss_enter_sound, boss_death_sound,
          swoosh_sound, rubber_pop_sound, gulp_sound,
-         milk_beam_sound, dick_sus_sound, thruster_sound) = (None,) * 13
+         milk_beam_sound, dick_sus_sound, thruster_sound, death_sound) = (None,) * 14
+        death_sfx_length = 0.0
 
     all_sounds_list = [
         tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
         butt_smack_sound, boss_enter_sound, boss_death_sound,
         swoosh_sound, rubber_pop_sound, gulp_sound,
-        milk_beam_sound, dick_sus_sound, thruster_sound
+        milk_beam_sound, dick_sus_sound, thruster_sound, death_sound
     ]
 
     start_btn    = Button(int(1280 * 0.10), 570, asset_path("Blast Off Button.png"), 0.5)
@@ -347,6 +351,7 @@ def main():
     prev_milk_beam_active = False
     prev_thruster_active  = False
     sus_playing           = False
+    death_freeze_timer    = 0.0   # counts down during post-death freeze
 
     updatable = pygame.sprite.Group()
     drawable  = pygame.sprite.Group()
@@ -427,6 +432,7 @@ def main():
                 prev_milk_beam_active = False
                 prev_thruster_active  = False
                 sus_playing           = False
+                death_freeze_timer    = 0.0
                 AsteroidField.speed_multiplier      = 1.0
                 AsteroidField.spawn_rate_multiplier = 1.0
                 Shot.containers      = (shots,     updatable, drawable)
@@ -554,10 +560,12 @@ def main():
                         player.consume_shield()
                         if audio_enabled: rubber_pop_sound.play()
                     else:
-                        high_score = go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel)
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled, death_sound,
+                            death_sfx_length)
                         sus_playing = False
-                        state = "MENU"
-                        break  # player is dead, stop processing bosses
+                        state = "DYING"
+                        break
                 for shot in list(shots):
                     if boss.collides_with(shot):
                         total_shots_fired -= 1
@@ -599,9 +607,11 @@ def main():
                         player.consume_shield()
                         if audio_enabled: rubber_pop_sound.play()
                     else:
-                        high_score = go_to_menu(score, high_score, audio_enabled, sus_channel, beam_channel)
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled, death_sound,
+                            death_sfx_length)
                         sus_playing = False
-                        state = "MENU"
+                        state = "DYING"
                         break  # player is dead, stop processing asteroids
                 for shot in list(shots):
                     if asteroid.collides_with(shot):
@@ -658,6 +668,20 @@ def main():
                 secs_left = math.ceil(player.dp_timer)
                 dp_txt = small_font.render(f"DOUBLE SHOT: {secs_left}s", True, (184, 0, 0))
                 internal_surf.blit(dp_txt, (20, hud_y))
+
+        # ===================================================================
+        # DYING STATE — freeze screen, count down, then go to menu
+        # ===================================================================
+        elif state == "DYING":
+            death_freeze_timer -= dt
+            if death_freeze_timer <= 0:
+                # SFX finished — now switch music and go to menu
+                if audio_enabled:
+                    pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
+                    pygame.mixer.music.set_volume(0.66)
+                    pygame.mixer.music.play(-1)
+                state = "MENU"
+            # internal_surf is not cleared — last game frame stays frozen on screen
 
         # ===================================================================
         # Final Scaling / Letterboxing
