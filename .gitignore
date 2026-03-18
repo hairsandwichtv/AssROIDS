@@ -10,3 +10,4 @@ game_events.jsonl
 
 # Virtual environments
 .venv
+*:Zone.Identifier
