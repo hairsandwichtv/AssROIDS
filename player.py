@@ -132,6 +132,10 @@ class Player(CircleShape):
         return [a, b, c]
 
     def draw(self, screen):
+        # Flash every 80ms during post-hit invincibility window
+        if self.invincible_timer > 0:
+            if (pygame.time.get_ticks() // 80) % 2 == 0:
+                return  # skip drawing this frame = flash effect
         img = self.shield_image if self.has_shield else self.original_image
         rotated  = pygame.transform.rotate(img, -self.rotation)
         new_rect = rotated.get_rect(center=(self.position.x, self.position.y))
