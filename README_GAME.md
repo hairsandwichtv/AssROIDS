@@ -32,13 +32,14 @@ The boss comes for you when the "Boss Sauce" meter is 100% full.
 Every Butt that's busted adds % to the "Boss Sauce" meter.
 This is because clapping cheeks attracts the Boss.
 
-The Boss is "Dick Butt".
-He wants to fuck your ass.
-Run from Dick Butt and shoot him till he dies.
-When Dick Butt dies, he destroys all poops/butts on screen,
-and then all speeds/multipliers increase by 3%.
-You are awarded points for any poops destroyed by Dick Butt's death explosion.
-(Yes, you can have more than one Dick Butt at the party. This is not fun.)
+The Boss is "Dick Butt". Or Tit Vag. Or Coin Purse.
+It's Random.
+They ALL want to fuck your ass.
+Run and shoot them till they die.
+When a Boss dies, it destroys all poops/butts on screen,
+and then all speeds/multipliers increase by 15%.
+You are awarded points for any poops destroyed by a Boss's death explosion.
+(Yes, you can have more than one Boss at the party. This is not fun.)
 
 Your highest score is saved automatically between sessions. Can you beat it?
 
@@ -54,6 +55,10 @@ and any object destroyed by the Milk Beam decreases Spice Level.
 Hold Spacebar (shoot keybind) to constantly spray your Milk Beam.
 The Milk Beam lasts for 15 seconds.
 Collecting another Zinc Pill while Milk Beam is active will simply refresh the timer.
+
+The DP Soda instantly recharges your thrusters, and let's you shoot two projectiles at once,
+for a double dose of penetration. While DP Soda is active, you may use your thrusters at no cost,
+for maximum Thrusting Power! 15 seconds of maximum Thrusting Power, anyway..
 
 TIPS:
 - Keep your spice level low.
