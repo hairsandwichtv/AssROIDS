@@ -6,6 +6,8 @@ import subprocess
 import math
 import random
 from starfield import Starfield
+from nebula import Nebula
+from particles import ParticleManager
 from constants import *
 from logger import log_state, log_event
 from player import Player
@@ -331,6 +333,8 @@ def main():
     readme_btn   = Button(133,              150, asset_path("READ ME Button.png"),   0.4)
     settings_btn = Button(int(1280 * 0.90), 150, asset_path("Settings Button.png"),  0.5)
     stars        = Starfield(1280, 720, 200)
+    nebula       = Nebula(1280, 720)
+    particles    = ParticleManager()
 
     settings        = load_settings()
     apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
@@ -354,7 +358,16 @@ def main():
     prev_milk_beam_active = False
     prev_thruster_active  = False
     sus_playing           = False
-    death_freeze_timer    = 0.0   # counts down during post-death freeze
+    death_freeze_timer    = 0.0
+    combo_count           = 0
+    combo_timer           = 0.0
+    COMBO_WINDOW          = 1.0
+    stat_poops_killed     = 0
+    stat_butts_killed     = 0
+    stat_bosses_killed    = 0
+    stat_shots_fired_raw  = 0   # raw shots for accuracy (not adjusted by boss hits)
+    stats_timer           = 0.0
+    STATS_DURATION        = 6.0
 
     updatable = pygame.sprite.Group()
     drawable  = pygame.sprite.Group()
@@ -436,8 +449,16 @@ def main():
                 prev_thruster_active  = False
                 sus_playing           = False
                 death_freeze_timer    = 0.0
+                combo_count           = 0
+                combo_timer           = 0.0
+                stat_poops_killed     = 0
+                stat_butts_killed     = 0
+                stat_bosses_killed    = 0
+                stat_shots_fired_raw  = 0
+                stats_timer           = 0.0
                 AsteroidField.speed_multiplier      = 1.0
                 AsteroidField.spawn_rate_multiplier = 1.0
+                particles.clear()
                 Shot.containers      = (shots,     updatable, drawable)
                 Asteroid.containers  = (asteroids, updatable, drawable)
                 AsteroidField.containers = (updatable,)
@@ -478,12 +499,15 @@ def main():
                 else:
                     if player.shoot():
                         total_shots_fired += 1
+                        stat_shots_fired_raw += 1
                         if audio_enabled: gun_sound.play()
 
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             for obj in updatable:
                 if obj is not player:
                     obj.update(dt)
+
+            # Combo timer — no longer needed, multiplier tracks hardness directly
 
             if audio_enabled:
                 if player.is_firing_beam and not prev_firing_beam:
@@ -581,6 +605,8 @@ def main():
                         total_shots_fired -= 1
                         shot.kill()
                         if boss.take_damage():
+                            stat_bosses_killed += 1
+                            particles.spawn_boss_explosion(boss.position.x, boss.position.y)
                             score, shake_timer = boss_death_clear(
                                 asteroids, score, audio_enabled,
                                 poop_splat_sound, boss_death_sound,
@@ -592,18 +618,37 @@ def main():
                     beam_damage_timer = BEAM_DAMAGE_INTERVAL
                     for asteroid in list(asteroids):
                         if beam_hits_circle(player, asteroid):
-                            if asteroid.radius > ASTEROID_MIN_RADIUS:
+                            is_poop = asteroid.radius <= ASTEROID_MIN_RADIUS
+                            multiplier = max(1, int(AsteroidField.speed_multiplier))
+                            if not is_poop:
                                 butts_busted += 1
-                            score += 1
+                                stat_butts_killed += 1
+                            combo_count += 1
+                            combo_timer  = COMBO_WINDOW
+                            points = 1 * multiplier
+                            score += points
                             spice_score += 1
-                            if asteroid.radius <= ASTEROID_MIN_RADIUS:
+                            if is_poop:
+                                stat_poops_killed += 1
                                 if audio_enabled: poop_splat_sound.play()
+                                pop_text  = f"+{points}" if multiplier == 1 else f"+{points} x{multiplier}"
+                                pop_color = (255, 255, 100) if multiplier == 1 else (255, 180, 0)
+                                particles.spawn_score_pop(asteroid.position.x,
+                                                          asteroid.position.y - 10,
+                                                          text=pop_text, color=pop_color)
                             else:
                                 if audio_enabled: butt_smack_sound.play()
+                            particles.spawn_explosion(asteroid.position.x,
+                                                      asteroid.position.y,
+                                                      is_butt=not is_poop)
+                            particles.check_meteor_shower(score)
+                            particles.check_personal_best(score, high_score)
                             asteroid.split()
                     for boss in list(bosses):
                         if beam_hits_circle(player, boss):
                             if boss.take_damage():
+                                stat_bosses_killed += 1
+                                particles.spawn_boss_explosion(boss.position.x, boss.position.y)
                                 score, shake_timer = boss_death_clear(
                                     asteroids, score, audio_enabled,
                                     poop_splat_sound, boss_death_sound,
@@ -625,34 +670,58 @@ def main():
                         break  # player is dead, stop processing asteroids
                 for shot in list(shots):
                     if asteroid.collides_with(shot):
-                        if asteroid.radius > ASTEROID_MIN_RADIUS:
+                        is_poop = asteroid.radius <= ASTEROID_MIN_RADIUS
+                        multiplier = max(1, int(AsteroidField.speed_multiplier))
+                        if not is_poop:
                             butts_busted += 1
-                        if asteroid.radius <= ASTEROID_MIN_RADIUS:
-                            score += 1
+                            stat_butts_killed += 1
+                        if is_poop:
+                            combo_count += 1
+                            combo_timer  = COMBO_WINDOW
+                            points = 1 * multiplier
+                            score += points
                             spice_score += 1
+                            stat_poops_killed += 1
                             if audio_enabled: poop_splat_sound.play()
+                            pop_text  = f"+{points}" if multiplier == 1 else f"+{points} x{multiplier}"
+                            pop_color = (255, 255, 100) if multiplier == 1 else (255, 180, 0)
+                            particles.spawn_score_pop(asteroid.position.x,
+                                                      asteroid.position.y - 10,
+                                                      text=pop_text, color=pop_color)
                         else:
                             if audio_enabled: butt_smack_sound.play()
+                        particles.spawn_explosion(asteroid.position.x,
+                                                  asteroid.position.y,
+                                                  is_butt=not is_poop)
+                        particles.check_meteor_shower(score)
+                        particles.check_personal_best(score, high_score)
                         shot.kill()
                         asteroid.split()
-                        break  # asteroid is dead, stop checking more shots against it
+                        break
 
             if shake_timer > 0:
                 shake_timer -= dt
 
             spice_level = max(0, total_shots_fired - spice_score)
+
+            # Update particles (exhaust spawns here too)
+            particles.update(dt, player=player)
+
+            # Draw layers: stars → nebula → meteors → milk beam → sprites → exhaust/explosions/pops
             stars.draw(internal_surf)
+            nebula.draw(internal_surf, spice_level)
+            particles.draw_background(internal_surf)
             if player.is_firing_beam:
                 draw_milk_beam(internal_surf, player)
             for obj in drawable:
                 obj.draw(internal_surf)
                 if DEBUG_HITBOXES and hasattr(obj, 'draw_debug'):
                     if hasattr(obj, 'triangle'):
-                        # Player — draw triangle hitbox
                         verts = obj.triangle()
                         pygame.draw.polygon(internal_surf, (255, 0, 0), [(v.x, v.y) for v in verts], 1)
                     else:
                         obj.draw_debug(internal_surf)
+            particles.draw_foreground(internal_surf)
             s_text = font.render(f"SCORE: {score}",             True, "white")
             h_text = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
             m_text = font.render(f"HARDNESS: {AsteroidField.speed_multiplier:.2f}x", True, (255, 100, 100))
@@ -680,17 +749,65 @@ def main():
                 internal_surf.blit(dp_txt, (20, hud_y))
 
         # ===================================================================
-        # DYING STATE — freeze screen, count down, then go to menu
+        # DYING STATE — freeze screen on death SFX, then show stats
         # ===================================================================
         elif state == "DYING":
             death_freeze_timer -= dt
             if death_freeze_timer <= 0:
+                stats_timer = STATS_DURATION
+                state = "STATS"
+
+        # ===================================================================
+        # STATS STATE — Player Shitistics screen
+        # ===================================================================
+        elif state == "STATS":
+            stats_timer += dt  # count up for prompt pulse animation only
+            accuracy = 0
+            if stat_shots_fired_raw > 0:
+                accuracy = int((stat_poops_killed / stat_shots_fired_raw) * 100)
+
+            internal_surf.fill((0, 0, 0))
+            stars.draw(internal_surf)
+
+            # RIP
+            rip_font  = pygame.font.SysFont("Arial", 52, bold=True)
+            rip_surf  = rip_font.render("RIP", True, (200, 0, 0))
+            internal_surf.blit(rip_surf, (640 - rip_surf.get_width() // 2, 80))
+
+            # Title
+            title_font = pygame.font.SysFont("Arial", 30, bold=True)
+            title_surf = title_font.render("Player Shitistics", True, (255, 215, 0))
+            internal_surf.blit(title_surf, (640 - title_surf.get_width() // 2, 150))
+
+            # Stats lines
+            stat_lines = [
+                f"Final Score:       {score}",
+                f"Poops Shot:        {stat_poops_killed}",
+                f"Butts Busted:      {stat_butts_killed}",
+                f"Bosses Downed:     {stat_bosses_killed}",
+                f"Shots Fired:       {stat_shots_fired_raw}",
+                f"Accuracy:          {accuracy}%",
+            ]
+            stat_font = pygame.font.SysFont("Arial", 22)
+            for i, line in enumerate(stat_lines):
+                surf = stat_font.render(line, True, "white")
+                internal_surf.blit(surf, (640 - surf.get_width() // 2, 220 + i * 38))
+
+            # Prompt
+            prompt_alpha = int(abs(math.sin(stats_timer * 3)) * 200 + 55)
+            prompt_surf  = small_font.render("[ Press any key to continue ]", True, (150, 150, 150))
+            prompt_surf.set_alpha(prompt_alpha)
+            internal_surf.blit(prompt_surf, (640 - prompt_surf.get_width() // 2, 460))
+
+            # Any key → menu (no time limit)
+            keys_pressed = pygame.key.get_pressed()
+            any_key = any(keys_pressed)
+            if any_key:
                 if audio_enabled:
                     pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
                     pygame.mixer.music.play(-1)
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
                 state = "MENU"
-            # internal_surf is not cleared — last game frame stays frozen on screen
 
         # ===================================================================
         # Final Scaling / Letterboxing

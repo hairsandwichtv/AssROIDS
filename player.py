@@ -43,6 +43,7 @@ class Player(CircleShape):
         # --- DP state ---
         self.dp_active = False
         self.dp_timer  = 0.0
+        self.is_moving = False
 
     # ------------------------------------------------------------------
     # Power-up helpers
@@ -222,10 +223,15 @@ class Player(CircleShape):
 
         # Movement
         boosting = self.thruster_active
+        self.is_moving = False
         if keys[pygame.K_a]: self.rotate(-dt)
         if keys[pygame.K_d]: self.rotate(dt)
-        if keys[pygame.K_w]: self.move(dt, boost=boosting)
-        if keys[pygame.K_s]: self.move(-dt, boost=boosting)
+        if keys[pygame.K_w]:
+            self.move(dt, boost=boosting)
+            self.is_moving = True
+        if keys[pygame.K_s]:
+            self.move(-dt, boost=boosting)
+            self.is_moving = True
 
         # Screen clamping
         self.position.x = max(self.radius, min(self.position.x, 1280 - self.radius))
