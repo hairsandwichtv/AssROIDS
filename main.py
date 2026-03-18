@@ -297,7 +297,9 @@ def main():
         gun_sound        = pygame.mixer.Sound(asset_path("Main Gun Sound.mp3"))
         poop_splat_sound = pygame.mixer.Sound(asset_path("Poop Splat.mp3"))
         butt_smack_sound = pygame.mixer.Sound(asset_path("Butt Smack.mp3"))
-        boss_enter_sound = pygame.mixer.Sound(asset_path("Boss Enter Cluck.mp3"))
+        boss_enter_sound      = pygame.mixer.Sound(asset_path("Boss Enter Cluck.mp3"))
+        titvag_enter_sound    = pygame.mixer.Sound(asset_path("Tit Vag Boss SFX.mp3"))
+        coinpurse_enter_sound = pygame.mixer.Sound(asset_path("Coin Purse Boss SFX.mp3"))
         boss_death_sound = pygame.mixer.Sound(asset_path("Boss Death FX.mp3"))
         swoosh_sound     = pygame.mixer.Sound(asset_path("Swoosh.mp3"))
         rubber_pop_sound = pygame.mixer.Sound(asset_path("Rubber Pop.mp3"))
@@ -313,7 +315,8 @@ def main():
         (tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
          butt_smack_sound, boss_enter_sound, boss_death_sound,
          swoosh_sound, rubber_pop_sound, gulp_sound,
-         milk_beam_sound, dick_sus_sound, thruster_sound, death_sound) = (None,) * 14
+         milk_beam_sound, dick_sus_sound, thruster_sound, death_sound,
+         titvag_enter_sound, coinpurse_enter_sound) = (None,) * 16
         death_sfx_length = 0.0
 
     all_sounds_list = [
@@ -325,7 +328,7 @@ def main():
 
     start_btn    = Button(int(1280 * 0.10), 570, asset_path("Blast Off Button.png"), 0.5)
     exit_btn     = Button(int(1280 * 0.90), 570, asset_path("Exit Button.png"),      0.5)
-    readme_btn   = Button(133,              150, asset_path("READ ME Button.png"),   0.5)
+    readme_btn   = Button(133,              150, asset_path("READ ME Button.png"),   0.4)
     settings_btn = Button(int(1280 * 0.90), 150, asset_path("Settings Button.png"),  0.5)
     stars        = Starfield(1280, 720, 200)
 
@@ -504,22 +507,29 @@ def main():
                 # Pick a random off-screen spawn point on any edge
                 edge_choice = random.randint(0, 3)
                 if edge_choice == 0:   # top
-                    bx, by = random.randint(0, 1280), -100
-                    bvx, bvy = random.uniform(-150, 150), random.uniform(150, 250)
+                    bx, by = random.randint(100, 1180), -100
                 elif edge_choice == 1: # bottom
-                    bx, by = random.randint(0, 1280), 820
-                    bvx, bvy = random.uniform(-150, 150), random.uniform(-250, -150)
+                    bx, by = random.randint(100, 1180), 820
                 elif edge_choice == 2: # left
-                    bx, by = -100, random.randint(0, 720)
-                    bvx, bvy = random.uniform(150, 250), random.uniform(-150, 150)
+                    bx, by = -100, random.randint(100, 620)
                 else:                  # right
-                    bx, by = 1380, random.randint(0, 720)
-                    bvx, bvy = random.uniform(-250, -150), random.uniform(-150, 150)
+                    bx, by = 1380, random.randint(100, 620)
+
+                # Aim toward screen center with a small random spread
+                target = pygame.Vector2(640, 360)
+                direction = (target - pygame.Vector2(bx, by)).normalize()
+                direction = direction.rotate(random.uniform(-25, 25))
+                speed = random.uniform(150, 220)
                 new_boss = Boss(bx, by, boss_hp)
-                new_boss.velocity = pygame.Vector2(bvx, bvy)
+                new_boss.velocity = direction * speed
                 butts_busted = 0
                 if audio_enabled:
-                    boss_enter_sound.play()
+                    if new_boss.skin == "dickbutt":
+                        boss_enter_sound.play()
+                    elif new_boss.skin == "titvag":
+                        titvag_enter_sound.play()
+                    elif new_boss.skin == "coinpurse":
+                        coinpurse_enter_sound.play()
                     if not sus_playing:
                         dick_sus_sound.set_volume(0.60)
                         dick_sus_sound.play(loops=-1)
