@@ -12,7 +12,7 @@ MILK_BEAM_DURATION   = 15.0
 INVINCIBLE_DURATION  = 1.5
 THRUSTER_DURATION    = 1.0
 THRUSTER_RECHARGE    = 60.0
-DP_DURATION          = 20.0  # seconds double-shot lasts
+DP_DURATION          = 15.0  # seconds double-shot lasts
 
 
 class Player(CircleShape):
@@ -197,15 +197,16 @@ class Player(CircleShape):
         shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
 
         if self.thruster_active:
-            # Drain proportionally — 1 full second depletes entire bar
-            self.thruster_charge = max(0.0, self.thruster_charge - dt / THRUSTER_DURATION)
+            # No drain while DP is active — free thruster use
+            if not self.dp_active:
+                self.thruster_charge = max(0.0, self.thruster_charge - dt / THRUSTER_DURATION)
             self.thruster_timer  += dt
-            # Stop if shift released or bar fully drained
+            # Stop if shift released or bar fully drained (drain only when not DP)
             if not shift_held or self.thruster_charge <= 0.0:
                 self.thruster_active = False
                 self.thruster_timer  = 0.0
                 if self.thruster_charge <= 0.0:
-                    self.thruster_locked = True   # locked until fully recharged
+                    self.thruster_locked = True
         else:
             # Recharge — faster as hardness increases
             if self.thruster_charge < 1.0:

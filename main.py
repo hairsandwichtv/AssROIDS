@@ -449,8 +449,8 @@ def main():
                 state         = "GAME"
                 if audio_enabled:
                     pygame.mixer.music.load(asset_path("Space Amb.mp3"))
-                    pygame.mixer.music.set_volume(0.45)
                     pygame.mixer.music.play(-1)
+                    apply_settings(settings, audio_enabled, all_sounds_list, in_game=True)
 
             if readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
                 open_readme()
@@ -685,11 +685,10 @@ def main():
         elif state == "DYING":
             death_freeze_timer -= dt
             if death_freeze_timer <= 0:
-                # SFX finished — now switch music and go to menu
                 if audio_enabled:
                     pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
-                    pygame.mixer.music.set_volume(0.66)
                     pygame.mixer.music.play(-1)
+                    apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
                 state = "MENU"
             # internal_surf is not cleared — last game frame stays frozen on screen
 
