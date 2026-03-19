@@ -2,8 +2,8 @@ import pygame
 from circleshape import CircleShape
 from shot import Shot
 from asset_helper import asset_path
-from constants import (PLAYER_RADIUS, LINE_WIDTH, PLAYER_TURN_SPEED, PLAYER_SPEED,
-                       PLAYER_SHOT_SPEED, SHOT_RADIUS, PLAYER_SHOT_COOLDOWN_SECONDS)
+from constants import (PLAYER_RADIUS, PLAYER_TURN_SPEED, PLAYER_SPEED,
+                       PLAYER_SHOT_SPEED, PLAYER_SHOT_COOLDOWN_SECONDS)
 
 SHIP_IMG   = pygame.image.load(asset_path("ship.png"))
 SHIELD_IMG = pygame.image.load(asset_path("ship_w_shield.png"))

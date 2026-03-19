@@ -76,6 +76,9 @@ class Nebula:
         self._last_spice = spice
 
     def draw(self, surface, spice):
-        if spice != self._last_spice:
-            self._rebuild(spice)
+        # Quantize to steps of 3 — reduces rebuild frequency significantly
+        # while still tracking color changes smoothly enough to be visible
+        quantized = (spice // 3) * 3
+        if quantized != self._last_spice:
+            self._rebuild(quantized)
         surface.blit(self._surf, (0, 0))

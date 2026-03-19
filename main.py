@@ -1,6 +1,5 @@
 import pygame
 import sys
-import os
 import json
 import subprocess
 import math
@@ -9,7 +8,8 @@ from starfield import Starfield
 from nebula import Nebula
 from particles import ParticleManager
 from constants import *
-from logger import log_state, log_event
+from logger import log_event
+from asset_helper import asset_path, writable_path
 from player import Player
 from asteroid import Asteroid
 from asteroidfield import AsteroidField
@@ -25,27 +25,6 @@ from circleshape import DEBUG_HITBOXES
 POWERUP_SPAWN_BASE   = 20.0
 BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
-
-# ---------------------------------------------------------------------------
-# Asset / writable path helpers
-# ---------------------------------------------------------------------------
-def asset_path(filename):
-    """Correct path to a read-only asset (bundled inside PyInstaller package)."""
-    if getattr(sys, "frozen", False):
-        base = sys._MEIPASS
-    else:
-        base = os.path.abspath(".")
-    return os.path.join(base, filename)
-
-def writable_path(filename):
-    """Correct path for files that must persist (scores, settings).
-    Uses %APPDATA%\\AssROIDS when frozen so Windows doesn't block writes."""
-    if getattr(sys, "frozen", False):
-        base = os.path.join(os.environ.get("APPDATA", os.path.dirname(sys.executable)), "AssROIDS")
-        os.makedirs(base, exist_ok=True)
-    else:
-        base = os.path.abspath(".")
-    return os.path.join(base, filename)
 
 HIGHSCORE_FILE = writable_path("highscore.txt")
 SETTINGS_FILE  = writable_path("settings.json")
@@ -201,36 +180,33 @@ def draw_settings_menu(surface, settings, font, small_font, waiting_for_key):
     surface.blit(esc_txt, (640 - esc_txt.get_width() // 2, 510))
     return slider_bg, box_rect, bind_rect
 
+_THRUSTERS_LABEL = None  # cached once after fonts are created
+
 def draw_thruster_bar(surface, x, y, width, height, charge, active, locked, font, tick):
     """Draw thruster bar with label inside, red->blue color shift, flash red when empty."""
-    # Color: interpolate red (255,0,0) → blue (0,160,220) based on charge
+    global _THRUSTERS_LABEL
     if locked:
-        # Flash red when locked out — alternates every 0.3s using tick
-        flash_on = (tick // 18) % 2 == 0
+        flash_on  = (tick // 18) % 2 == 0
         bar_color = (220, 0, 0) if flash_on else (100, 0, 0)
     elif active:
-        bar_color = (0, 220, 255)   # bright cyan while boosting
+        bar_color = (0, 220, 255)
     else:
         r = int(255 * (1.0 - charge))
-        g = 0
         b = int(220 * charge)
-        bar_color = (r, g, b)
+        bar_color = (r, 0, b)
 
-    # Background
     pygame.draw.rect(surface, (20, 30, 50), (x, y, width, height), border_radius=4)
-    # Fill
     fill_w = max(0, int(width * charge))
     if fill_w > 0:
         pygame.draw.rect(surface, bar_color, (x, y, fill_w, height), border_radius=4)
-    # Metallic highlight strip (top quarter)
-    highlight_color = (min(bar_color[0] + 80, 255), min(bar_color[1] + 80, 255), min(bar_color[2] + 80, 255))
-    pygame.draw.rect(surface, highlight_color, (x, y, width, height // 4), border_radius=4)
-    # Border
+    highlight = (min(bar_color[0]+80,255), min(bar_color[1]+80,255), min(bar_color[2]+80,255))
+    pygame.draw.rect(surface, highlight, (x, y, width, height // 4), border_radius=4)
     pygame.draw.rect(surface, (60, 120, 200), (x, y, width, height), 2, border_radius=4)
-    # Label centered inside bar
-    label = font.render("THRUSTERS", True, "white")
-    surface.blit(label, (x + width // 2 - label.get_width() // 2,
-                         y + height // 2 - label.get_height() // 2))
+    if _THRUSTERS_LABEL is None:
+        _THRUSTERS_LABEL = font.render("THRUSTERS", True, "white")
+    surface.blit(_THRUSTERS_LABEL,
+                 (x + width // 2 - _THRUSTERS_LABEL.get_width() // 2,
+                  y + height // 2 - _THRUSTERS_LABEL.get_height() // 2))
 
 def player_death(score, high_score, audio_enabled, death_sound, death_sfx_length):
     """Trigger player death — play SFX, save score, stop other audio.
@@ -359,13 +335,10 @@ def main():
     prev_thruster_active  = False
     sus_playing           = False
     death_freeze_timer    = 0.0
-    combo_count           = 0
-    combo_timer           = 0.0
-    COMBO_WINDOW          = 1.0
     stat_poops_killed     = 0
     stat_butts_killed     = 0
     stat_bosses_killed    = 0
-    stat_shots_fired_raw  = 0   # raw shots for accuracy (not adjusted by boss hits)
+    stat_shots_fired_raw  = 0
     stats_timer           = 0.0
     STATS_DURATION        = 6.0
 
@@ -375,6 +348,10 @@ def main():
     shots     = pygame.sprite.Group()
     bosses    = pygame.sprite.Group()
     powerups  = pygame.sprite.Group()
+
+    # HUD render cache — surfaces only rebuilt when values change
+    _hud_score   = _hud_spice = _hud_hard = None
+    _hud_score_v = _hud_spice_v = _hud_hard_v = None
 
     while True:
         for event in pygame.event.get():
@@ -449,8 +426,6 @@ def main():
                 prev_thruster_active  = False
                 sus_playing           = False
                 death_freeze_timer    = 0.0
-                combo_count           = 0
-                combo_timer           = 0.0
                 stat_poops_killed     = 0
                 stat_butts_killed     = 0
                 stat_bosses_killed    = 0
@@ -503,11 +478,10 @@ def main():
                         if audio_enabled: gun_sound.play()
 
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
+            stars.update(dt, hardness=AsteroidField.speed_multiplier)
             for obj in updatable:
                 if obj is not player:
                     obj.update(dt)
-
-            # Combo timer — no longer needed, multiplier tracks hardness directly
 
             if audio_enabled:
                 if player.is_firing_beam and not prev_firing_beam:
@@ -623,8 +597,6 @@ def main():
                             if not is_poop:
                                 butts_busted += 1
                                 stat_butts_killed += 1
-                            combo_count += 1
-                            combo_timer  = COMBO_WINDOW
                             points = 1 * multiplier
                             score += points
                             spice_score += 1
@@ -676,8 +648,6 @@ def main():
                             butts_busted += 1
                             stat_butts_killed += 1
                         if is_poop:
-                            combo_count += 1
-                            combo_timer  = COMBO_WINDOW
                             points = 1 * multiplier
                             score += points
                             spice_score += 1
@@ -708,7 +678,7 @@ def main():
             particles.update(dt, player=player)
 
             # Draw layers: stars → nebula → meteors → milk beam → sprites → exhaust/explosions/pops
-            stars.draw(internal_surf)
+            stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
             nebula.draw(internal_surf, spice_level)
             particles.draw_background(internal_surf)
             if player.is_firing_beam:
@@ -722,12 +692,19 @@ def main():
                     else:
                         obj.draw_debug(internal_surf)
             particles.draw_foreground(internal_surf)
-            s_text = font.render(f"SCORE: {score}",             True, "white")
-            h_text = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
-            m_text = font.render(f"HARDNESS: {AsteroidField.speed_multiplier:.2f}x", True, (255, 100, 100))
-            internal_surf.blit(s_text, (20, 650))
-            internal_surf.blit(h_text, (990, 80))
-            internal_surf.blit(m_text, (20, 680))
+            if score != _hud_score_v:
+                _hud_score   = font.render(f"SCORE: {score}", True, "white")
+                _hud_score_v = score
+            if spice_level != _hud_spice_v:
+                _hud_spice   = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
+                _hud_spice_v = spice_level
+            _hard_v = round(AsteroidField.speed_multiplier, 2)
+            if _hard_v != _hud_hard_v:
+                _hud_hard   = font.render(f"HARDNESS: {_hard_v:.2f}x", True, (255, 100, 100))
+                _hud_hard_v = _hard_v
+            internal_surf.blit(_hud_score, (20, 650))
+            internal_surf.blit(_hud_spice, (990, 80))
+            internal_surf.blit(_hud_hard,  (20, 680))
             draw_thruster_bar(internal_surf, 20, 20, 250, 22,
                               player.thruster_charge, player.thruster_active,
                               player.thruster_locked, small_font,
@@ -767,7 +744,7 @@ def main():
                 accuracy = int((stat_poops_killed / stat_shots_fired_raw) * 100)
 
             internal_surf.fill((0, 0, 0))
-            stars.draw(internal_surf)
+            stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
 
             # RIP
             rip_font  = pygame.font.SysFont("Arial", 52, bold=True)
@@ -779,14 +756,12 @@ def main():
             title_surf = title_font.render("Player Shitistics", True, (255, 215, 0))
             internal_surf.blit(title_surf, (640 - title_surf.get_width() // 2, 150))
 
-            # Stats lines
             stat_lines = [
                 f"Final Score:       {score}",
-                f"Poops Shot:        {stat_poops_killed}",
-                f"Butts Busted:      {stat_butts_killed}",
+                f"Shit Shot:         {stat_poops_killed}",
+                f"Cheeks Clapped:    {stat_butts_killed}",
                 f"Bosses Downed:     {stat_bosses_killed}",
                 f"Shots Fired:       {stat_shots_fired_raw}",
-                f"Accuracy:          {accuracy}%",
             ]
             stat_font = pygame.font.SysFont("Arial", 22)
             for i, line in enumerate(stat_lines):
