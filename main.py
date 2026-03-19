@@ -16,6 +16,7 @@ from asteroidfield import AsteroidField
 from shot import Shot
 from button import Button
 from boss import Boss
+from enemy_ship import MandingoShip, MandingoShot
 from powerup import PowerUp
 from circleshape import DEBUG_HITBOXES
 
@@ -285,8 +286,12 @@ def main():
         milk_beam_sound  = pygame.mixer.Sound(asset_path("Milk Beam SFX long.mp3"))
         dick_sus_sound   = pygame.mixer.Sound(asset_path("Dick Butt Sus SFX.mp3"))
         thruster_sound   = pygame.mixer.Sound(asset_path("Thrusters SFX.mp3"))
-        death_sound      = pygame.mixer.Sound(asset_path("Player Death SFX.mp3"))
-        death_sfx_length = death_sound.get_length()  # seconds — used for freeze duration
+        death_sound           = pygame.mixer.Sound(asset_path("Player Death SFX.mp3"))
+        death_sfx_length      = death_sound.get_length()
+        mandingo_enter_sound  = pygame.mixer.Sound(asset_path("Mandingo Enter SFX.mp3"))
+        mandingo_engine_sound = pygame.mixer.Sound(asset_path("Mandingo Engine SFX.mp3"))
+        mandingo_charge_sound = pygame.mixer.Sound(asset_path("Mandingo Beam Charge SFX.mp3"))
+        explosion_sfx         = pygame.mixer.Sound(asset_path("Explosion - SFX.mp3"))
         sus_channel      = pygame.mixer.Channel(6)
         beam_channel     = pygame.mixer.Channel(7)
     else:
@@ -294,7 +299,8 @@ def main():
          butt_smack_sound, boss_enter_sound, boss_death_sound,
          swoosh_sound, rubber_pop_sound, gulp_sound,
          milk_beam_sound, dick_sus_sound, thruster_sound, death_sound,
-         titvag_enter_sound, coinpurse_enter_sound) = (None,) * 16
+         titvag_enter_sound, coinpurse_enter_sound,
+         mandingo_enter_sound, mandingo_engine_sound, mandingo_charge_sound, explosion_sfx) = (None,) * 20
         death_sfx_length = 0.0
 
     all_sounds_list = [
@@ -344,10 +350,18 @@ def main():
 
     updatable = pygame.sprite.Group()
     drawable  = pygame.sprite.Group()
-    asteroids = pygame.sprite.Group()
-    shots     = pygame.sprite.Group()
-    bosses    = pygame.sprite.Group()
-    powerups  = pygame.sprite.Group()
+    asteroids      = pygame.sprite.Group()
+    shots          = pygame.sprite.Group()
+    bosses         = pygame.sprite.Group()
+    powerups       = pygame.sprite.Group()
+    mandingos      = pygame.sprite.Group()
+    mandingo_shots = pygame.sprite.Group()
+
+    # Anti-turtle timer — spawns enemy ship if no boss in 2 minutes (reduced by hardness)
+    ANTI_TURTLE_BASE   = 3.0    # TEST: spawn quickly — change back to 120.0 when done
+    anti_turtle_timer  = ANTI_TURTLE_BASE
+    mandingo_engine_ch = None   # channel for looping engine sound
+    mandingo_engine_playing = False
 
     # HUD render cache — surfaces only rebuilt when values change
     _hud_score   = _hud_spice = _hud_hard = None
@@ -434,12 +448,22 @@ def main():
                 AsteroidField.speed_multiplier      = 1.0
                 AsteroidField.spawn_rate_multiplier = 1.0
                 particles.clear()
-                Shot.containers      = (shots,     updatable, drawable)
-                Asteroid.containers  = (asteroids, updatable, drawable)
+                mandingos.empty()
+                mandingo_shots.empty()
+                anti_turtle_timer       = ANTI_TURTLE_BASE
+                mandingo_engine_playing = False
+                if audio_enabled and mandingo_engine_ch:
+                    mandingo_engine_ch.stop()
+                if audio_enabled and mandingo_charge_sound:
+                    mandingo_charge_sound.stop()
+                Shot.containers       = (shots,          updatable, drawable)
+                Asteroid.containers   = (asteroids,      updatable, drawable)
                 AsteroidField.containers = (updatable,)
-                Player.containers    = (updatable, drawable)
-                Boss.containers      = (bosses,    updatable, drawable)
-                PowerUp.containers   = (powerups,  updatable, drawable)
+                Player.containers     = (updatable,      drawable)
+                Boss.containers       = (bosses,         updatable, drawable)
+                PowerUp.containers    = (powerups,       updatable, drawable)
+                MandingoShip.containers = (mandingos,    updatable, drawable)
+                MandingoShot.containers = (mandingo_shots, updatable, drawable)
                 player        = Player(1280 / 2, 720 / 2)
                 asteroid_field = AsteroidField()
                 state         = "GAME"
@@ -480,9 +504,47 @@ def main():
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
             for obj in updatable:
-                if obj is not player:
+                if obj is not player and obj not in mandingos:
                     obj.update(dt)
 
+            # Mandingo needs player position and shot group — updated separately
+            for m in list(mandingos):
+                prev_state = m._fire_state
+                m.update(dt, player.position, AsteroidField.speed_multiplier,
+                         mandingo_shots)
+                # Play charge sound when ship enters charging state (restart if already charging)
+                if audio_enabled and mandingo_charge_sound:
+                    if m._fire_state == "charging" and prev_state != "charging":
+                        mandingo_charge_sound.stop()
+                        mandingo_charge_sound.play()
+
+            # Anti-turtle timer — spawn Mandingo if no boss spawned in time
+            anti_turtle_timer -= dt * AsteroidField.speed_multiplier
+            if anti_turtle_timer <= 0 and len(mandingos) == 0:
+                anti_turtle_timer = ANTI_TURTLE_BASE
+                spice_level       = max(0, total_shots_fired - spice_score)
+                m_hp              = 15 + spice_level
+                # Spawn off screen aimed at center
+                edge = random.randint(0, 3)
+                if edge == 0:   mx, my = random.randint(100, 1180), -120
+                elif edge == 1: mx, my = random.randint(100, 1180), 840
+                elif edge == 2: mx, my = -120, random.randint(100, 620)
+                else:           mx, my = 1400, random.randint(100, 620)
+                new_mandingo = MandingoShip(mx, my, m_hp)
+                if audio_enabled:
+                    mandingo_enter_sound.play()
+                    mandingo_engine_ch = pygame.mixer.find_channel()
+                    if mandingo_engine_ch:
+                        mandingo_engine_ch.play(mandingo_engine_sound, loops=-1)
+                    mandingo_engine_playing = True
+
+            # Stop engine sound when no mandingos alive
+            if mandingo_engine_playing and len(mandingos) == 0:
+                if audio_enabled and mandingo_engine_ch:
+                    mandingo_engine_ch.stop()
+                mandingo_engine_playing = False
+
+            # Reset anti-turtle timer when a boss spawns
             if audio_enabled:
                 if player.is_firing_beam and not prev_firing_beam:
                     milk_beam_sound.play(loops=-1)
@@ -520,7 +582,8 @@ def main():
                 speed = random.uniform(150, 220)
                 new_boss = Boss(bx, by, boss_hp)
                 new_boss.velocity = direction * speed
-                butts_busted = 0
+                butts_busted      = 0
+                anti_turtle_timer = ANTI_TURTLE_BASE  # boss spawned — reset turtle timer
                 if audio_enabled:
                     if new_boss.skin == "dickbutt":
                         boss_enter_sound.play()
@@ -625,6 +688,22 @@ def main():
                                     asteroids, score, audio_enabled,
                                     poop_splat_sound, boss_death_sound,
                                     shake_timer, SHAKE_DURATION)
+                    for mandingo in list(mandingos):
+                        if beam_hits_circle(player, mandingo):
+                            total_shots_fired -= 1  # don't add to spice
+                            if mandingo.take_damage():
+                                bonus = mandingo.poops_destroyed + 50
+                                score       += bonus
+                                particles.spawn_score_pop(
+                                    mandingo.position.x, mandingo.position.y - 20,
+                                    text=f"+{bonus}", color=(255, 200, 0))
+                                particles.spawn_metal_explosion(
+                                    mandingo.position.x, mandingo.position.y)
+                                if audio_enabled:
+                                    explosion_sfx.play()
+                                    if mandingo_charge_sound: mandingo_charge_sound.stop()
+                                particles.check_personal_best(score, high_score)
+                                particles.check_meteor_shower(score)
             else:
                 beam_damage_timer = 0.0
 
@@ -668,6 +747,106 @@ def main():
                         shot.kill()
                         asteroid.split()
                         break
+
+            # ---------------------------------------------------------------
+            # MANDINGO COLLISIONS
+            # ---------------------------------------------------------------
+            for mandingo in list(mandingos):
+
+                # Mandingo shot hits player — once per shot
+                for mshot in list(mandingo_shots):
+                    if id(player) not in mshot.hit_ids and mshot.collides_with(player) and not player.is_invincible():
+                        mshot.hit_ids.add(id(player))
+                        if player.has_shield:
+                            player.consume_shield()
+                            if audio_enabled: rubber_pop_sound.play()
+                        else:
+                            high_score, death_freeze_timer = player_death(
+                                score, high_score, audio_enabled,
+                                death_sound, death_sfx_length)
+                            sus_playing = False
+                            state = "DYING"
+                            break
+
+                # Mandingo shot hits asteroids — shot plows through everything
+                for mshot in list(mandingo_shots):
+                    if not mshot.alive():
+                        continue
+                    for asteroid in list(asteroids):
+                        if id(asteroid) not in mshot.hit_ids and mshot.collides_with(asteroid):
+                            mshot.hit_ids.add(id(asteroid))
+                            if asteroid.radius <= 20:
+                                mandingo.poops_destroyed += 1
+                                if audio_enabled: poop_splat_sound.play()
+                            else:
+                                butts_busted += 1
+                                if audio_enabled: butt_smack_sound.play()
+                            particles.spawn_explosion(
+                                asteroid.position.x, asteroid.position.y,
+                                is_butt=(asteroid.radius > 20))
+                            asteroid.split()
+                    # Also damages boss — once per shot, 3 HP
+                    for boss in list(bosses):
+                        if id(boss) not in mshot.hit_ids and mshot.collides_with(boss):
+                            mshot.hit_ids.add(id(boss))
+                            for _ in range(3):
+                                if boss.take_damage():
+                                    stat_bosses_killed += 1
+                                    particles.spawn_boss_explosion(boss.position.x, boss.position.y)
+                                    score, shake_timer = boss_death_clear(
+                                        asteroids, score, audio_enabled,
+                                        poop_splat_sound, boss_death_sound,
+                                        shake_timer, SHAKE_DURATION)
+                                    break
+
+                # Mandingo body collides with asteroids
+                for asteroid in list(asteroids):
+                    broad = mandingo.radius + asteroid.visual_radius
+                    if mandingo.position.distance_squared_to(asteroid.position) <= broad * broad:
+                        if asteroid.radius <= 20:  # poop
+                            mandingo.poops_destroyed += 1
+                            if audio_enabled: poop_splat_sound.play()
+                        else:
+                            butts_busted += 1
+                            if audio_enabled: butt_smack_sound.play()
+                        particles.spawn_explosion(
+                            asteroid.position.x, asteroid.position.y,
+                            is_butt=(asteroid.radius > 20))
+                        asteroid.split()
+
+                # Player shots hit Mandingo
+                for shot in list(shots):
+                    if mandingo.collides_with(shot):
+                        total_shots_fired -= 1  # don't add to spice level
+                        shot.kill()
+                        if mandingo.take_damage():
+                            # Mandingo died — reward player
+                            bonus = mandingo.poops_destroyed + 50
+                            score       += bonus
+                            particles.spawn_score_pop(
+                                mandingo.position.x,
+                                mandingo.position.y - 20,
+                                text=f"+{bonus}",
+                                color=(255, 200, 0))
+                            particles.spawn_metal_explosion(
+                                mandingo.position.x, mandingo.position.y)
+                            if audio_enabled:
+                                explosion_sfx.play()
+                                if mandingo_charge_sound: mandingo_charge_sound.stop()
+                            particles.check_meteor_shower(score)
+                        break
+
+                # Mandingo collides with player
+                if mandingo.collides_with(player) and not player.is_invincible():
+                    if player.has_shield:
+                        player.consume_shield()
+                        if audio_enabled: rubber_pop_sound.play()
+                    else:
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled,
+                            death_sound, death_sfx_length)
+                        sus_playing = False
+                        state = "DYING"
 
             if shake_timer > 0:
                 shake_timer -= dt

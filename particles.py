@@ -247,28 +247,71 @@ class ShootingStar:
 
 
 # ---------------------------------------------------------------------------
+# Metal Explosion Particle (enemy ship death)
+# ---------------------------------------------------------------------------
+class MetalExplosionParticle:
+    def __init__(self, x, y):
+        angle      = random.uniform(0, math.pi * 2)
+        speed      = random.uniform(60, 280)
+        self.x     = x + random.uniform(-20, 20)
+        self.y     = y + random.uniform(-20, 20)
+        self.vx    = math.cos(angle) * speed
+        self.vy    = math.sin(angle) * speed
+        self.life  = random.uniform(0.4, 1.0)
+        self.timer = 0.0
+        self.alive = True
+        self.size  = random.randint(2, 8)
+        self.color = random.choice([
+            (180, 180, 190),  # silver
+            (140, 140, 150),  # steel
+            (220, 200, 100),  # spark gold
+            (255, 140,   0),  # orange spark
+            (255, 255, 255),  # white spark
+            ( 80,  80,  90),  # dark metal
+        ])
+
+    def update(self, dt):
+        self.timer += dt
+        self.x     += self.vx * dt
+        self.y     += self.vy * dt
+        self.vx    *= 0.90
+        self.vy    *= 0.90
+        if self.timer >= self.life:
+            self.alive = False
+
+    def draw(self, surface):
+        frac  = self.timer / self.life
+        alpha = int(255 * (1.0 - frac) ** 1.2)
+        size  = max(1, int(self.size * (1.0 - frac * 0.5)))
+        _draw_circle_alpha(surface, self.color,
+                           (int(self.x), int(self.y)), size, alpha)
+
+
+# ---------------------------------------------------------------------------
 # Particle Manager
 # ---------------------------------------------------------------------------
 class ParticleManager:
     def __init__(self):
-        self.score_pops      = []
-        self.exhaust         = []
-        self.explosions      = []
-        self.meteors         = []
-        self.boss_explosions = []
-        self.personal_bests  = []
-        self._last_milestone = 0
-        self._pb_shown       = False
+        self.score_pops       = []
+        self.exhaust          = []
+        self.explosions       = []
+        self.meteors          = []
+        self.boss_explosions  = []
+        self.personal_bests   = []
+        self.metal_explosions = []
+        self._last_milestone  = 0
+        self._pb_shown        = False
 
     def clear(self):
-        self.score_pops      = []
-        self.exhaust         = []
-        self.explosions      = []
-        self.meteors         = []
-        self.boss_explosions = []
-        self.personal_bests  = []
-        self._last_milestone = 0
-        self._pb_shown       = False
+        self.score_pops       = []
+        self.exhaust          = []
+        self.explosions       = []
+        self.meteors          = []
+        self.boss_explosions  = []
+        self.personal_bests   = []
+        self.metal_explosions = []
+        self._last_milestone  = 0
+        self._pb_shown        = False
 
     # -- Spawners --
     def spawn_score_pop(self, x, y, text="+1", color=(255,255,100)):
@@ -283,6 +326,11 @@ class ParticleManager:
         if not self._pb_shown and score > high_score:
             self._pb_shown = True
             self.personal_bests.append(PersonalBestPop(640, 300))
+
+    def spawn_metal_explosion(self, x, y):
+        """60 metal/spark particles for enemy ship death."""
+        for _ in range(60):
+            self.metal_explosions.append(MetalExplosionParticle(x, y))
 
     def spawn_explosion(self, x, y, is_butt, count=None):
         n = count or (18 if is_butt else 10)
@@ -329,16 +377,18 @@ class ParticleManager:
         if player:
             self.spawn_exhaust(player)
         all_lists = (self.score_pops, self.exhaust, self.explosions,
-                     self.meteors, self.boss_explosions, self.personal_bests)
+                     self.meteors, self.boss_explosions, self.personal_bests,
+                     self.metal_explosions)
         for lst in all_lists:
             for p in lst:
                 p.update(dt)
-        self.score_pops      = [p for p in self.score_pops      if p.alive]
-        self.exhaust         = [p for p in self.exhaust          if p.alive]
-        self.explosions      = [p for p in self.explosions       if p.alive]
-        self.meteors         = [p for p in self.meteors          if p.alive]
-        self.boss_explosions = [p for p in self.boss_explosions  if p.alive]
-        self.personal_bests  = [p for p in self.personal_bests   if p.alive]
+        self.score_pops       = [p for p in self.score_pops       if p.alive]
+        self.exhaust          = [p for p in self.exhaust           if p.alive]
+        self.explosions       = [p for p in self.explosions        if p.alive]
+        self.meteors          = [p for p in self.meteors           if p.alive]
+        self.boss_explosions  = [p for p in self.boss_explosions   if p.alive]
+        self.personal_bests   = [p for p in self.personal_bests    if p.alive]
+        self.metal_explosions = [p for p in self.metal_explosions  if p.alive]
 
     # -- Draw --
     def draw_background(self, surface):
@@ -351,6 +401,8 @@ class ParticleManager:
         for p in self.explosions:
             p.draw(surface)
         for p in self.boss_explosions:
+            p.draw(surface)
+        for p in self.metal_explosions:
             p.draw(surface)
         for p in self.score_pops:
             p.draw(surface)
