@@ -1,5 +1,6 @@
 import pygame
 import sys
+import os
 import json
 import subprocess
 import math
@@ -8,7 +9,6 @@ from starfield import Starfield
 from nebula import Nebula
 from particles import ParticleManager
 from constants import *
-from logger import log_event
 from asset_helper import asset_path, writable_path
 from player import Player
 from asteroid import Asteroid
@@ -257,14 +257,15 @@ def main():
     internal_surf = pygame.Surface(internal_res)
     font          = pygame.font.SysFont("Arial", 24, bold=True)
     small_font    = pygame.font.SysFont("Arial", 18, bold=True)
+    stats_rip_font   = pygame.font.SysFont("Arial", 52, bold=True)
+    stats_title_font = pygame.font.SysFont("Arial", 30, bold=True)
+    stats_line_font  = pygame.font.SysFont("Arial", 22)
     clock         = pygame.time.Clock()
     dt            = 0
 
     menu_bg_original = pygame.image.load(asset_path("AssROIDS Menu BG.png")).convert()
     menu_bg          = pygame.transform.scale(menu_bg_original, internal_res)
 
-    sus_channel  = None
-    beam_channel = None
 
     if audio_enabled:
         pygame.mixer.set_num_channels(16)
@@ -292,8 +293,6 @@ def main():
         mandingo_engine_sound = pygame.mixer.Sound(asset_path("Mandingo Engine SFX.mp3"))
         mandingo_charge_sound = pygame.mixer.Sound(asset_path("Mandingo Beam Charge SFX.mp3"))
         explosion_sfx         = pygame.mixer.Sound(asset_path("Explosion - SFX.mp3"))
-        sus_channel      = pygame.mixer.Channel(6)
-        beam_channel     = pygame.mixer.Channel(7)
     else:
         (tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
          butt_smack_sound, boss_enter_sound, boss_death_sound,
@@ -346,7 +345,7 @@ def main():
     stat_bosses_killed    = 0
     stat_shots_fired_raw  = 0
     stats_timer           = 0.0
-    STATS_DURATION        = 6.0
+    _stats_keys_on_open   = set()
 
     updatable = pygame.sprite.Group()
     drawable  = pygame.sprite.Group()
@@ -358,7 +357,7 @@ def main():
     mandingo_shots = pygame.sprite.Group()
 
     # Anti-turtle timer — spawns enemy ship if no boss in 2 minutes (reduced by hardness)
-    ANTI_TURTLE_BASE   = 3.0    # TEST: spawn quickly — change back to 120.0 when done
+    ANTI_TURTLE_BASE   = 120.0  # seconds before anti-turtle ship spawns
     anti_turtle_timer  = ANTI_TURTLE_BASE
     mandingo_engine_ch = None   # channel for looping engine sound
     mandingo_engine_playing = False
@@ -366,6 +365,9 @@ def main():
     # HUD render cache — surfaces only rebuilt when values change
     _hud_score   = _hud_spice = _hud_hard = None
     _hud_score_v = _hud_spice_v = _hud_hard_v = None
+    _hs_label    = font.render("HIGHEST SCORE", True, (255, 215, 0))
+    _hs_value    = None
+    _hs_value_v  = None
 
     while True:
         for event in pygame.event.get():
@@ -416,10 +418,11 @@ def main():
         # ===================================================================
         if state == "MENU":
             internal_surf.blit(menu_bg, (0, 0))
-            hs_label = font.render("HIGHEST SCORE", True, (255, 215, 0))
-            hs_value = font.render(str(high_score),  True, "white")
-            internal_surf.blit(hs_label, (640 - hs_label.get_width() // 2, 100))
-            internal_surf.blit(hs_value, (640 - hs_value.get_width() // 2, 130))
+            if high_score != _hs_value_v:
+                _hs_value   = font.render(str(high_score), True, "white")
+                _hs_value_v = high_score
+            internal_surf.blit(_hs_label, (640 - _hs_label.get_width() // 2, 100))
+            internal_surf.blit(_hs_value, (640 - _hs_value.get_width() // 2, 130))
 
             if start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
                 if audio_enabled:
@@ -625,7 +628,8 @@ def main():
             for boss in list(bosses):
                 dx = player.position.x - boss.position.x
                 dy = player.position.y - boss.position.y
-                boss.angle = math.degrees(math.atan2(-dy, dx)) + 180
+                base_angle = math.degrees(math.atan2(-dy, dx)) + 180
+                boss.angle = base_angle + (90 if boss.skin == "coinpurse" else 0)
                 if boss.collides_with(player) and not player.is_invincible():
                     if player.has_shield:
                         player.consume_shield()
@@ -910,7 +914,8 @@ def main():
         elif state == "DYING":
             death_freeze_timer -= dt
             if death_freeze_timer <= 0:
-                stats_timer = STATS_DURATION
+                stats_timer = 0.0
+                _stats_keys_on_open = set(i for i, k in enumerate(pygame.key.get_pressed()) if k)
                 state = "STATS"
 
         # ===================================================================
@@ -918,21 +923,18 @@ def main():
         # ===================================================================
         elif state == "STATS":
             stats_timer += dt  # count up for prompt pulse animation only
-            accuracy = 0
-            if stat_shots_fired_raw > 0:
-                accuracy = int((stat_poops_killed / stat_shots_fired_raw) * 100)
 
             internal_surf.fill((0, 0, 0))
             stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
 
             # RIP
-            rip_font  = pygame.font.SysFont("Arial", 52, bold=True)
-            rip_surf  = rip_font.render("RIP", True, (200, 0, 0))
+
+            rip_surf  = stats_rip_font.render("RIP", True, (200, 0, 0))
             internal_surf.blit(rip_surf, (640 - rip_surf.get_width() // 2, 80))
 
             # Title
-            title_font = pygame.font.SysFont("Arial", 30, bold=True)
-            title_surf = title_font.render("Player Shitistics", True, (255, 215, 0))
+
+            title_surf = stats_title_font.render("Player Shitistics", True, (255, 215, 0))
             internal_surf.blit(title_surf, (640 - title_surf.get_width() // 2, 150))
 
             stat_lines = [
@@ -942,9 +944,9 @@ def main():
                 f"Bosses Downed:     {stat_bosses_killed}",
                 f"Shots Fired:       {stat_shots_fired_raw}",
             ]
-            stat_font = pygame.font.SysFont("Arial", 22)
+
             for i, line in enumerate(stat_lines):
-                surf = stat_font.render(line, True, "white")
+                surf = stats_line_font.render(line, True, "white")
                 internal_surf.blit(surf, (640 - surf.get_width() // 2, 220 + i * 38))
 
             # Prompt
@@ -955,8 +957,10 @@ def main():
 
             # Any key → menu (no time limit)
             keys_pressed = pygame.key.get_pressed()
-            any_key = any(keys_pressed)
-            if any_key:
+            # Close only when a key pressed NOW was NOT held when stats screen opened
+            new_key = any(k and i not in _stats_keys_on_open
+                         for i, k in enumerate(keys_pressed))
+            if new_key:
                 if audio_enabled:
                     pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
                     pygame.mixer.music.play(-1)

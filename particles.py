@@ -376,19 +376,21 @@ class ParticleManager:
     def update(self, dt, player=None):
         if player:
             self.spawn_exhaust(player)
-        all_lists = (self.score_pops, self.exhaust, self.explosions,
-                     self.meteors, self.boss_explosions, self.personal_bests,
-                     self.metal_explosions)
-        for lst in all_lists:
+        # Single pass per list — update and filter dead particles together
+        def tick(lst):
+            result = []
             for p in lst:
                 p.update(dt)
-        self.score_pops       = [p for p in self.score_pops       if p.alive]
-        self.exhaust          = [p for p in self.exhaust           if p.alive]
-        self.explosions       = [p for p in self.explosions        if p.alive]
-        self.meteors          = [p for p in self.meteors           if p.alive]
-        self.boss_explosions  = [p for p in self.boss_explosions   if p.alive]
-        self.personal_bests   = [p for p in self.personal_bests    if p.alive]
-        self.metal_explosions = [p for p in self.metal_explosions  if p.alive]
+                if p.alive:
+                    result.append(p)
+            return result
+        self.score_pops       = tick(self.score_pops)
+        self.exhaust          = tick(self.exhaust)
+        self.explosions       = tick(self.explosions)
+        self.meteors          = tick(self.meteors)
+        self.boss_explosions  = tick(self.boss_explosions)
+        self.personal_bests   = tick(self.personal_bests)
+        self.metal_explosions = tick(self.metal_explosions)
 
     # -- Draw --
     def draw_background(self, surface):

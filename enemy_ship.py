@@ -1,7 +1,7 @@
 import pygame
 import math
 import random
-from circleshape import CircleShape
+from circleshape import CircleShape, DEBUG_HITBOXES
 from asset_helper import asset_path
 from constants import PLAYER_RADIUS, PLAYER_SPEED
 
@@ -60,7 +60,7 @@ class MandingoShip(CircleShape):
         self.flash_timer     = 0.0
         self.poops_destroyed = 0
         self._locked_dir     = None
-        # State machine: "moving" → "charging" → "cooldown"
+        # State machine: "moving" → "charging"
         self._fire_state      = "moving"
         self._charge_timer    = 0.0
         self._charge_duration = MANDINGO_CHARGE_TIME
@@ -120,7 +120,6 @@ class MandingoShip(CircleShape):
         return body or wing
 
     def draw_debug(self, screen):
-        from circleshape import DEBUG_HITBOXES
         if not DEBUG_HITBOXES:
             return
         # Body ellipse
@@ -207,8 +206,8 @@ class MandingoShip(CircleShape):
             if dist > 0:
                 target = math.degrees(math.atan2(-to_player.y, to_player.x)) + 90
                 delta  = (target - self.angle + 180) % 360 - 180
-                self.angle = (self.angle + max(-MANDINGO_TURN_SPEED * dt,
-                                               min(MANDINGO_TURN_SPEED * dt, delta))) % 360
+                turn = MANDINGO_TURN_SPEED * hardness * dt
+                self.angle = (self.angle + max(-turn, min(turn, delta))) % 360
             self.position += to_player_norm * MANDINGO_BASE_SPEED * hardness * dt
 
             # Only check alignment after entry delay has expired
