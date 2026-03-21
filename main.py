@@ -16,7 +16,7 @@ from asteroidfield import AsteroidField
 from shot import Shot
 from button import Button
 from boss import Boss
-from enemy_ship import MandingoShip, MandingoShot
+from enemy_ship import MandingoShip, MandingoShot, VulvaShip
 from powerup import PowerUp
 from circleshape import DEBUG_HITBOXES
 
@@ -118,27 +118,42 @@ def draw_boss_sauce(surface, x, y, width, height, current_butts, font):
     surface.blit(label, (x, y - 25))
 
 def beam_hits_circle(player, target):
-    forward   = pygame.Vector2(0, 1).rotate(player.rotation)
+    forward = pygame.Vector2(0, 1).rotate(player.rotation)
+    right   = pygame.Vector2(0, 1).rotate(player.rotation + 90) * (player.radius * 0.45)
+    origins = ([pygame.Vector2(player.position) - right,
+                pygame.Vector2(player.position) + right]
+               if player.dp_active
+               else [pygame.Vector2(player.position)])
     to_target = target.position - player.position
     proj      = to_target.dot(forward)
     if proj < 0 or proj > BEAM_LENGTH:
         return False
-    perp_dist = (to_target - forward * proj).length()
-    return perp_dist <= target.radius + 5
+    for origin in origins:
+        to_t      = target.position - origin
+        perp_dist = (to_t - forward * proj).length()
+        if perp_dist <= target.radius + 5:
+            return True
+    return False
 
 def draw_milk_beam(surface, player):
     forward = pygame.Vector2(0, 1).rotate(player.rotation)
-    start   = pygame.Vector2(player.position) + forward * (player.radius + 4)
-    for _ in range(30):
-        t      = random.uniform(0, BEAM_LENGTH)
-        jitter = pygame.Vector2(random.randint(-6, 6), random.randint(-6, 6))
-        pos    = start + forward * t + jitter
-        fade   = max(0.15, 1.0 - t / BEAM_LENGTH)
-        size   = max(1, int(random.randint(2, 5) * fade))
-        white  = int(210 + 45 * fade)
-        color  = (white, white, 255)
-        if 0 <= pos.x <= 1280 and 0 <= pos.y <= 720:
-            pygame.draw.circle(surface, color, (int(pos.x), int(pos.y)), size)
+    right   = pygame.Vector2(0, 1).rotate(player.rotation + 90) * (player.radius * 0.45)
+    origins = ([pygame.Vector2(player.position) - right,
+                pygame.Vector2(player.position) + right]
+               if player.dp_active
+               else [pygame.Vector2(player.position)])
+    for origin in origins:
+        start = origin + forward * (player.radius + 4)
+        for _ in range(30):
+            t      = random.uniform(0, BEAM_LENGTH)
+            jitter = pygame.Vector2(random.randint(-6, 6), random.randint(-6, 6))
+            pos    = start + forward * t + jitter
+            fade   = max(0.15, 1.0 - t / BEAM_LENGTH)
+            size   = max(1, int(random.randint(2, 5) * fade))
+            white  = int(210 + 45 * fade)
+            color  = (white, white, 255)
+            if 0 <= pos.x <= 1280 and 0 <= pos.y <= 720:
+                pygame.draw.circle(surface, color, (int(pos.x), int(pos.y)), size)
 
 def draw_settings_menu(surface, settings, font, small_font, waiting_for_key):
     overlay = pygame.Surface((1280, 720), pygame.SRCALPHA)
@@ -270,8 +285,11 @@ def main():
     if audio_enabled:
         pygame.mixer.set_num_channels(16)
         pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
-        pygame.mixer.music.set_volume(0.66)
-        pygame.mixer.music.play(-1)
+        _pre_settings = load_settings()
+        _vol = _pre_settings.get("master_volume", 1.0)
+        if not _pre_settings.get("mute_menu_song", False):
+            pygame.mixer.music.set_volume(0.66 * _vol)
+            pygame.mixer.music.play(-1)
         tick_sound       = pygame.mixer.Sound(asset_path("Button Tick.mp3"))
         blast_off_sound  = pygame.mixer.Sound(asset_path("Blast Off SFX.mp3"))
         gun_sound        = pygame.mixer.Sound(asset_path("Main Gun Sound.mp3"))
@@ -293,13 +311,16 @@ def main():
         mandingo_engine_sound = pygame.mixer.Sound(asset_path("Mandingo Engine SFX.mp3"))
         mandingo_charge_sound = pygame.mixer.Sound(asset_path("Mandingo Beam Charge SFX.mp3"))
         explosion_sfx         = pygame.mixer.Sound(asset_path("Explosion - SFX.mp3"))
+        vulva_enter_sound     = pygame.mixer.Sound(asset_path("Vulva Enter SFX.mp3"))
+        vulva_engine_sound    = pygame.mixer.Sound(asset_path("Vulva Engine SFX.mp3"))
     else:
         (tick_sound, blast_off_sound, gun_sound, poop_splat_sound,
          butt_smack_sound, boss_enter_sound, boss_death_sound,
          swoosh_sound, rubber_pop_sound, gulp_sound,
          milk_beam_sound, dick_sus_sound, thruster_sound, death_sound,
          titvag_enter_sound, coinpurse_enter_sound,
-         mandingo_enter_sound, mandingo_engine_sound, mandingo_charge_sound, explosion_sfx) = (None,) * 20
+         mandingo_enter_sound, mandingo_engine_sound, mandingo_charge_sound, explosion_sfx,
+         vulva_enter_sound, vulva_engine_sound) = (None,) * 22
         death_sfx_length = 0.0
 
     all_sounds_list = [
@@ -326,6 +347,7 @@ def main():
     score             = 0
     spice_score       = 0
     butts_busted      = 0
+    first_shot_fired  = False
     total_shots_fired = 0
     high_score        = load_high_score()
 
@@ -355,9 +377,12 @@ def main():
     powerups       = pygame.sprite.Group()
     mandingos      = pygame.sprite.Group()
     mandingo_shots = pygame.sprite.Group()
+    vulvas               = pygame.sprite.Group()
+    vulva_engine_ch      = None
+    vulva_engine_playing = False
 
     # Anti-turtle timer — spawns enemy ship if no boss in 2 minutes (reduced by hardness)
-    ANTI_TURTLE_BASE   = 120.0  # seconds before anti-turtle ship spawns
+    ANTI_TURTLE_BASE   = 75.0  # seconds before anti-turtle ship spawns
     anti_turtle_timer  = ANTI_TURTLE_BASE
     mandingo_engine_ch = None   # channel for looping engine sound
     mandingo_engine_playing = False
@@ -435,6 +460,7 @@ def main():
                 spice_score       = 0
                 butts_busted      = 0
                 total_shots_fired = 0
+                first_shot_fired  = False
                 shake_timer       = 0.0
                 powerup_spawn_timer   = POWERUP_SPAWN_BASE
                 beam_damage_timer     = 0.0
@@ -453,23 +479,43 @@ def main():
                 particles.clear()
                 mandingos.empty()
                 mandingo_shots.empty()
+                vulvas.empty()
                 anti_turtle_timer       = ANTI_TURTLE_BASE
                 mandingo_engine_playing = False
+                vulva_engine_playing    = False
                 if audio_enabled and mandingo_engine_ch:
                     mandingo_engine_ch.stop()
                 if audio_enabled and mandingo_charge_sound:
                     mandingo_charge_sound.stop()
+                if audio_enabled and vulva_engine_ch:
+                    vulva_engine_ch.stop()
                 Shot.containers       = (shots,          updatable, drawable)
                 Asteroid.containers   = (asteroids,      updatable, drawable)
                 AsteroidField.containers = (updatable,)
                 Player.containers     = (updatable,      drawable)
                 Boss.containers       = (bosses,         updatable, drawable)
                 PowerUp.containers    = (powerups,       updatable, drawable)
-                MandingoShip.containers = (mandingos,    updatable, drawable)
+                MandingoShip.containers = (mandingos,      updatable, drawable)
                 MandingoShot.containers = (mandingo_shots, updatable, drawable)
+                VulvaShip.containers    = (vulvas,         updatable, drawable)
                 player        = Player(1280 / 2, 720 / 2)
                 asteroid_field = AsteroidField()
+                asteroid_field.butt_delay = 15.0  # suppressed until first shot or 15s elapses
                 state         = "GAME"
+                first_shot_fired = False
+                # Spawn 99 stationary poops, clear of player spawn
+                player_spawn = pygame.Vector2(1280 / 2, 720 / 2)
+                for _ in range(99):
+                    while True:
+                        pos = pygame.Vector2(
+                            random.randint(60, 1220),
+                            random.randint(60, 660)
+                        )
+                        if pos.distance_to(player_spawn) >= 120:
+                            break
+                    poop = Asteroid(pos.x, pos.y, ASTEROID_MIN_RADIUS)
+                    poop.velocity  = pygame.Vector2(0, 0)
+                    poop.spin_rate = random.uniform(-120, 120)  # random rotation
                 if audio_enabled:
                     pygame.mixer.music.load(asset_path("Space Amb.mp3"))
                     pygame.mixer.music.play(-1)
@@ -497,17 +543,20 @@ def main():
             keys = pygame.key.get_pressed()
             if keys[Player.shoot_key]:
                 if player.milk_beam_active:
-                    pass
+                    pass  # beam handles damage — no projectile fired
                 else:
                     if player.shoot():
                         total_shots_fired += 1
                         stat_shots_fired_raw += 1
                         if audio_enabled: gun_sound.play()
+                        if not first_shot_fired:
+                            first_shot_fired = True
+                            asteroid_field.butt_delay = 3.0
 
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
             for obj in updatable:
-                if obj is not player and obj not in mandingos:
+                if obj is not player and obj not in mandingos and obj not in vulvas:
                     obj.update(dt)
 
             # Mandingo needs player position and shot group — updated separately
@@ -515,38 +564,62 @@ def main():
                 prev_state = m._fire_state
                 m.update(dt, player.position, AsteroidField.speed_multiplier,
                          mandingo_shots)
-                # Play charge sound when ship enters charging state (restart if already charging)
                 if audio_enabled and mandingo_charge_sound:
                     if m._fire_state == "charging" and prev_state != "charging":
                         mandingo_charge_sound.stop()
                         mandingo_charge_sound.play()
 
-            # Anti-turtle timer — spawn Mandingo if no boss spawned in time
+            # Vulva needs player position — updated separately
+            for v in list(vulvas):
+                v.update(dt, player.position, AsteroidField.speed_multiplier,
+                         asteroids, bosses)
+
+            # Vulva engine sound — play while any vulva is alive
+            if vulvas:
+                if not vulva_engine_playing:
+                    if audio_enabled and vulva_engine_sound:
+                        vulva_engine_ch = pygame.mixer.find_channel()
+                        if vulva_engine_ch:
+                            vulva_engine_ch.play(vulva_engine_sound, loops=-1)
+                    vulva_engine_playing = True
+            else:
+                if vulva_engine_playing:
+                    if audio_enabled and vulva_engine_ch:
+                        vulva_engine_ch.stop()
+                    vulva_engine_playing = False
+
+            # Anti-turtle timer — randomly spawn Mandingo OR Vulva
             anti_turtle_timer -= dt * AsteroidField.speed_multiplier
-            if anti_turtle_timer <= 0 and len(mandingos) == 0:
+            if anti_turtle_timer <= 0 and len(mandingos) == 0 and len(vulvas) == 0:
                 anti_turtle_timer = ANTI_TURTLE_BASE
                 spice_level       = max(0, total_shots_fired - spice_score)
-                m_hp              = 15 + spice_level
-                # Spawn off screen aimed at center
                 edge = random.randint(0, 3)
-                if edge == 0:   mx, my = random.randint(100, 1180), -120
-                elif edge == 1: mx, my = random.randint(100, 1180), 840
-                elif edge == 2: mx, my = -120, random.randint(100, 620)
-                else:           mx, my = 1400, random.randint(100, 620)
-                new_mandingo = MandingoShip(mx, my, m_hp)
-                if audio_enabled:
-                    mandingo_enter_sound.play()
-                    mandingo_engine_ch = pygame.mixer.find_channel()
-                    if mandingo_engine_ch:
-                        mandingo_engine_ch.play(mandingo_engine_sound, loops=-1)
-                    mandingo_engine_playing = True
+                if edge == 0:   ex, ey = random.randint(100, 1180), -120
+                elif edge == 1: ex, ey = random.randint(100, 1180), 840
+                elif edge == 2: ex, ey = -120, random.randint(100, 620)
+                else:           ex, ey = 1400, random.randint(100, 620)
+                if random.random() < 0.34:  # 34% Mandingo, 66% Vulva
+                    # Spawn Mandingo
+                    m_hp = 15 + spice_level
+                    MandingoShip(ex, ey, m_hp)
+                    if audio_enabled:
+                        mandingo_enter_sound.play()
+                        mandingo_engine_ch = pygame.mixer.find_channel()
+                        if mandingo_engine_ch:
+                            mandingo_engine_ch.play(mandingo_engine_sound, loops=-1)
+                        mandingo_engine_playing = True
+                else:
+                    # Spawn Vulva
+                    v_hp = 1 + int(AsteroidField.speed_multiplier)
+                    VulvaShip(ex, ey, v_hp)
+                    if audio_enabled and vulva_enter_sound:
+                        vulva_enter_sound.play()
 
-            # Stop engine sound when no mandingos alive
+            # Stop mandingo engine sound when no mandingos alive
             if mandingo_engine_playing and len(mandingos) == 0:
                 if audio_enabled and mandingo_engine_ch:
                     mandingo_engine_ch.stop()
                 mandingo_engine_playing = False
-
             # Reset anti-turtle timer when a boss spawns
             if audio_enabled:
                 if player.is_firing_beam and not prev_firing_beam:
@@ -855,6 +928,87 @@ def main():
             if shake_timer > 0:
                 shake_timer -= dt
 
+            # ── Vulva Ship collisions ────────────────────────────────────────
+            for vulva in list(vulvas):
+                if not vulva.alive():
+                    continue
+
+                # Vulva hits player
+                if vulva.collides_with(player) and not player.is_invincible():
+                    if player.has_shield:
+                        player.consume_shield()
+                        if audio_enabled: rubber_pop_sound.play()
+                    else:
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled,
+                            death_sound, death_sfx_length)
+                        sus_playing = False
+                        state = "DYING"
+
+                # Vulva hits asteroids — destroys everything it touches
+                for asteroid in list(asteroids):
+                    if getattr(asteroid, 'grace_timer', 0) > 0:
+                        continue
+                    if vulva.collides_with(asteroid):
+                        if asteroid.radius <= 20:
+                            vulva.poops_destroyed += 1
+                            if audio_enabled: poop_splat_sound.play()
+                        else:
+                            butts_busted += 1
+                            if audio_enabled: butt_smack_sound.play()
+                        particles.spawn_explosion(
+                            asteroid.position.x, asteroid.position.y,
+                            is_butt=(asteroid.radius > 20))
+                        asteroid.split()
+
+                # Vulva hits bosses — 3 HP once per frame per boss
+                for boss in list(bosses):
+                    if id(boss) not in vulva.boss_hit_ids and vulva.collides_with(boss):
+                        vulva.boss_hit_ids.add(id(boss))
+                        for _ in range(3):
+                            if boss.take_damage():
+                                stat_bosses_killed += 1
+                                particles.spawn_boss_explosion(boss.position.x, boss.position.y)
+                                score, shake_timer = boss_death_clear(
+                                    asteroids, score, audio_enabled,
+                                    poop_splat_sound, boss_death_sound,
+                                    shake_timer, SHAKE_DURATION)
+                                break
+
+                # Player shots hit Vulva
+                for shot in list(shots):
+                    if vulva.collides_with(shot):
+                        total_shots_fired -= 1  # don't add to spice level
+                        shot.kill()
+                        if vulva.take_damage():
+                            bonus = vulva.poops_destroyed + 25
+                            score += bonus
+                            particles.spawn_score_pop(
+                                vulva.position.x, vulva.position.y - 20,
+                                text=f"+{bonus}", color=(255, 200, 0))
+                            particles.spawn_metal_explosion(
+                                vulva.position.x, vulva.position.y)
+                            if audio_enabled: explosion_sfx.play()
+                            particles.check_personal_best(score, high_score)
+                            particles.check_meteor_shower(score)
+                        break
+
+                # Beam hits Vulva
+                if player.is_firing_beam:
+                    if beam_hits_circle(player, vulva):
+                        total_shots_fired -= 1
+                        if vulva.take_damage():
+                            bonus = vulva.poops_destroyed + 25
+                            score += bonus
+                            particles.spawn_score_pop(
+                                vulva.position.x, vulva.position.y - 20,
+                                text=f"+{bonus}", color=(255, 200, 0))
+                            particles.spawn_metal_explosion(
+                                vulva.position.x, vulva.position.y)
+                            if audio_enabled: explosion_sfx.play()
+                            particles.check_personal_best(score, high_score)
+                            particles.check_meteor_shower(score)
+
             spice_level = max(0, total_shots_fired - spice_score)
 
             # Update particles (exhaust spawns here too)
@@ -898,7 +1052,7 @@ def main():
                 shield_txt = small_font.render("SHIELD ACTIVE", True, (100, 200, 255))
                 internal_surf.blit(shield_txt, (20, hud_y))
                 hud_y += 24
-            if player.milk_beam_active:
+            if player.is_firing_beam:
                 secs_left = math.ceil(player.milk_beam_timer)
                 beam_txt  = small_font.render(f"MILK BEAM: {secs_left}s", True, (200, 220, 255))
                 internal_surf.blit(beam_txt, (20, hud_y))

@@ -239,3 +239,317 @@ class MandingoShip(CircleShape):
             self.kill()
             return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# Vulva Ship
+# ---------------------------------------------------------------------------
+import math as _math
+VULVA_RADIUS      = PLAYER_RADIUS               # 20px — same as player
+VULVA_BASE_SPEED  = PLAYER_SPEED * 1.33         # ~266px/s base, scales with hardness
+VULVA_HYPERDRIVE  = 500.0                       # px/s during hyperdrive blast-off
+VULVA_LIFETIME    = 18.0                        # seconds before charge state
+VULVA_CHARGE_TIME = 1.8                         # flash duration before hyperdrive
+VULVA_FLASH_DUR   = 0.08
+VULVA_ELLIPSE_A   = 0.85                        # almond semi-major (along length)
+VULVA_ELLIPSE_B   = 0.38                        # almond semi-minor (across width)
+VULVA_STREAK_LEN  = 28                          # max trail positions stored
+VULVA_AVOID_RADIUS = 120                         # px — player within this range triggers steering
+
+VULVA_IMG = pygame.image.load(asset_path("Vulva Ship.png"))
+
+
+class VulvaShip(CircleShape):
+    def __init__(self, x, y, health):
+        super().__init__(x, y, VULVA_RADIUS)
+        self.health          = health
+        self.angle           = 0.0
+        self.flash_timer     = 0.0
+        self.poops_destroyed = 0
+        self._state          = "entering"   # entering → evading → charging → hyperdrive
+        self._lifetime       = VULVA_LIFETIME
+        self._charge_timer   = 0.0
+        self._hyperdrive_dir = pygame.Vector2(0, -1)
+        self._streak         = []           # (x, y) positions for wake trail
+        self._cos_a          = 1.0
+        self._sin_a          = 0.0
+        self.boss_hit_ids    = set()
+        self._entry_target   = pygame.Vector2(640 + random.uniform(-120, 120),
+                                              360 + random.uniform(-120, 120))
+        # Five random anchor/safety points within centered 960x540 boundary
+        self._anchors = [
+            pygame.Vector2(random.uniform(160, 1120), random.uniform(90, 630))
+            for _ in range(5)
+        ]
+        self._current_anchor     = None
+        self._last_anchor_idx    = -1   # tracks last visited — excluded from next pick
+
+        size = VULVA_RADIUS * 2
+        self.original_image = pygame.transform.scale(
+            VULVA_IMG, (size, size)
+        ).convert_alpha()
+
+    # ── Trig cache ───────────────────────────────────────────────────────
+    def _update_trig(self):
+        rad = _math.radians(-self.angle + 90)   # +90 aligns ellipse along ship facing
+        self._cos_a = _math.cos(rad)
+        self._sin_a = _math.sin(rad)
+
+    # ── Collision — rotated almond ellipse ───────────────────────────────
+    def collides_with(self, other):
+        dist_sq = self.position.distance_squared_to(other.position)
+        if dist_sq > (self.radius + other.radius) ** 2:
+            return False
+        r  = other.radius
+        a  = self.radius * VULVA_ELLIPSE_A
+        b  = self.radius * VULVA_ELLIPSE_B
+        dx = other.position.x - self.position.x
+        dy = other.position.y - self.position.y
+        lx =  self._cos_a * dx + self._sin_a * dy
+        ly = -self._sin_a * dx + self._cos_a * dy
+        return (lx / (a + r)) ** 2 + (ly / (b + r)) ** 2 <= 1.0
+
+    # ── Debug hitbox ─────────────────────────────────────────────────────
+    def draw_debug(self, screen):
+        if not DEBUG_HITBOXES:
+            return
+        a = self.radius * VULVA_ELLIPSE_A
+        b = self.radius * VULVA_ELLIPSE_B
+        points = []
+        for i in range(36):
+            t  = _math.radians(i * 10)
+            ex = a * _math.cos(t)
+            ey = b * _math.sin(t)
+            wx = self._cos_a * ex - self._sin_a * ey + self.position.x
+            wy = self._sin_a * ex + self._cos_a * ey + self.position.y
+            points.append((int(wx), int(wy)))
+        pygame.draw.polygon(screen, (0, 200, 255), points, 1)
+
+    # ── Draw ─────────────────────────────────────────────────────────────
+    def draw(self, screen):
+        # Hyperdrive streak trail
+        if self._state == "hyperdrive" and len(self._streak) > 1:
+            n = len(self._streak)
+            for i in range(n - 1):
+                frac  = i / n
+                # Outer wide glow — purple/blue, wide and transparent
+                r_out = int(160 * frac)
+                g_out = int(80  * frac)
+                b_out = 255
+                w_out = max(1, int(20 * frac))
+                p1 = (int(self._streak[i][0]),     int(self._streak[i][1]))
+                p2 = (int(self._streak[i + 1][0]), int(self._streak[i + 1][1]))
+                glow_surf = pygame.Surface((1280, 720), pygame.SRCALPHA)
+                pygame.draw.line(glow_surf, (r_out, g_out, b_out, int(60 * frac)),
+                                 p1, p2, w_out)
+                screen.blit(glow_surf, (0, 0))
+                # Mid layer — cyan/white
+                r_mid = int(200 + 55 * frac)
+                g_mid = int(220 * frac)
+                w_mid = max(1, int(8 * frac))
+                pygame.draw.line(screen, (r_mid, g_mid, 255), p1, p2, w_mid)
+                # Hot white core
+                if frac > 0.6:
+                    pygame.draw.line(screen, (255, 255, 255), p1, p2,
+                                     max(1, int(3 * frac)))
+            # Blazing tip glow
+            if n > 2:
+                tip = self._streak[-1]
+                for glow_r, alpha, color in [
+                    (28, 60,  (100, 60,  255)),
+                    (18, 100, (180, 120, 255)),
+                    (10, 180, (220, 200, 255)),
+                    (5,  255, (255, 255, 255)),
+                ]:
+                    gs = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(gs, (*color, alpha), (glow_r, glow_r), glow_r)
+                    screen.blit(gs, (int(tip[0]) - glow_r, int(tip[1]) - glow_r))
+
+        rotated = pygame.transform.rotate(self.original_image, self.angle)
+        rect    = rotated.get_rect(center=(int(self.position.x), int(self.position.y)))
+        screen.blit(rotated, rect.topleft)
+
+        # Charge flash + pulsing aura
+        if self._state == "charging":
+            # Pulsing aura — expands and fades outward
+            t         = pygame.time.get_ticks() / 1000.0
+            pulse     = (_math.sin(t * 10) + 1) / 2          # 0..1 oscillating fast
+            aura_r    = int(self.radius * 1.1 + pulse * self.radius * 0.6)
+            aura_alpha = int(50 + pulse * 90)
+            aura_surf = pygame.Surface((aura_r * 2, aura_r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(aura_surf, (180, 100, 255, aura_alpha),
+                               (aura_r, aura_r), aura_r)
+            screen.blit(aura_surf, (int(self.position.x) - aura_r,
+                                    int(self.position.y) - aura_r))
+            # Inner bright ring
+            ring_r = int(self.radius * 1.0 + pulse * self.radius * 0.2)
+            pygame.draw.circle(screen, (220, 160, 255),
+                               (int(self.position.x), int(self.position.y)),
+                               ring_r, 2)
+            # White flash overlay on beat
+            if (pygame.time.get_ticks() // 80) % 2 == 0:
+                mask      = pygame.mask.from_surface(rotated)
+                mask_surf = mask.to_surface(setcolor=(255, 255, 255, 200),
+                                            unsetcolor=(0, 0, 0, 0))
+                screen.blit(mask_surf, rect.topleft)
+
+        # Hit flash
+        if self.flash_timer > 0:
+            alpha     = int(200 * (self.flash_timer / VULVA_FLASH_DUR))
+            mask      = pygame.mask.from_surface(rotated)
+            mask_surf = mask.to_surface(setcolor=(255, 255, 255, alpha),
+                                        unsetcolor=(0, 0, 0, 0))
+            screen.blit(mask_surf, rect.topleft)
+
+        if DEBUG_HITBOXES:
+            self.draw_debug(screen)
+
+    # ── Update ───────────────────────────────────────────────────────────
+    def _closest_anchor(self, pos):
+        candidates = [(i, a) for i, a in enumerate(self._anchors)
+                      if i != self._last_anchor_idx]
+        idx, anchor = min(candidates, key=lambda x: pos.distance_squared_to(x[1]))
+        self._last_anchor_idx = idx
+        return anchor
+
+    def _furthest_anchor(self, pos):
+        candidates = [(i, a) for i, a in enumerate(self._anchors)
+                      if i != self._last_anchor_idx]
+        idx, anchor = max(candidates, key=lambda x: pos.distance_squared_to(x[1]))
+        self._last_anchor_idx = idx
+        return anchor
+
+    def _clamp_to_screen(self):
+        self.position.x = max(self.radius, min(self.position.x, 1280 - self.radius))
+        self.position.y = max(self.radius, min(self.position.y, 720  - self.radius))
+
+    def _move_toward(self, target, speed, dt, avoid_pos=None):
+        direction = target - self.position
+        if direction.length() == 0:
+            return
+        direction = direction.normalize()
+
+        # If player is close, blend in a perpendicular repulsion
+        if avoid_pos is not None:
+            to_avoid = self.position - avoid_pos
+            avoid_dist = to_avoid.length()
+            if 0 < avoid_dist < VULVA_AVOID_RADIUS:
+                # Strength scales up as player gets closer (0 at edge, 1 at contact)
+                strength = 1.0 - (avoid_dist / VULVA_AVOID_RADIUS)
+                avoid_norm = to_avoid / avoid_dist
+                # Pick the perpendicular that steers most away from player
+                perp1 = pygame.Vector2(-direction.y,  direction.x)
+                perp2 = pygame.Vector2( direction.y, -direction.x)
+                perp = perp1 if perp1.dot(avoid_norm) >= perp2.dot(avoid_norm) else perp2
+                direction = (direction + perp * strength * 2.0).normalize()
+
+        self.angle = _math.degrees(_math.atan2(-direction.y, direction.x)) + 90
+        self.position += direction * speed * dt
+
+    def update(self, dt, player_pos, hardness, asteroids, bosses):
+        if self.flash_timer > 0:
+            self.flash_timer = max(0.0, self.flash_timer - dt)
+
+        self.boss_hit_ids.clear()
+        self._update_trig()
+
+        speed = VULVA_BASE_SPEED * hardness
+
+        # ── ENTERING ─────────────────────────────────────────────────────
+        if self._state == "entering":
+            self._move_toward(self._entry_target, speed, dt)
+            if (self.radius < self.position.x < 1280 - self.radius and
+                    self.radius < self.position.y < 720 - self.radius):
+                # Pick closest anchor as first destination
+                self._current_anchor = self._closest_anchor(self.position)
+                self._state = "moving_to_anchor"
+            return
+
+        # ── MOVING TO ANCHOR ─────────────────────────────────────────────
+        if self._state == "moving_to_anchor":
+            self._lifetime -= dt
+            if self._lifetime <= 0:
+                self._begin_charge(player_pos)
+                return
+            self._move_toward(self._current_anchor, speed, dt, avoid_pos=player_pos)
+            self._clamp_to_screen()
+            if self.position.distance_to(self._current_anchor) < 12:
+                self._state = "hunting"
+            return
+
+        # ── HUNTING ──────────────────────────────────────────────────────
+        if self._state == "hunting":
+            self._lifetime -= dt
+            if self._lifetime <= 0:
+                self._begin_charge(player_pos)
+                return
+
+            # Find closest POOP only (radius <= 20) that is on screen — butts destroyed incidentally
+            closest      = None
+            closest_dist = float("inf")
+            for obj in list(asteroids):
+                if obj.visual_radius <= 20:   # poop only
+                    if (0 <= obj.position.x <= 1280 and 0 <= obj.position.y <= 720):
+                        d = self.position.distance_squared_to(obj.position)
+                        if d < closest_dist:
+                            closest_dist = d
+                            closest      = obj
+
+            player_dist_sq = self.position.distance_squared_to(player_pos)
+
+            if closest is None:
+                # No poops — keep moving to furthest anchor from player
+                self._current_anchor = self._furthest_anchor(player_pos)
+                self._state = "fleeing"
+            elif player_dist_sq < closest_dist:
+                # Player is between ship and a poop — flee to furthest anchor from player
+                self._current_anchor = self._furthest_anchor(player_pos)
+                self._state = "fleeing"
+            else:
+                self._move_toward(closest.position, speed, dt, avoid_pos=player_pos)
+            self._clamp_to_screen()
+            return
+
+        # ── FLEEING ───────────────────────────────────────────────────────
+        if self._state == "fleeing":
+            self._lifetime -= dt
+            if self._lifetime <= 0:
+                self._begin_charge(player_pos)
+                return
+            self._move_toward(self._current_anchor, speed, dt, avoid_pos=player_pos)
+            self._clamp_to_screen()
+            if self.position.distance_to(self._current_anchor) < 12:
+                self._state = "hunting"
+            return
+
+        # ── CHARGING ─────────────────────────────────────────────────────
+        if self._state == "charging":
+            self._charge_timer -= dt
+            if self._charge_timer <= 0:
+                self._state = "hyperdrive"
+            return
+
+        # ── HYPERDRIVE ───────────────────────────────────────────────────
+        if self._state == "hyperdrive":
+            self._streak.append((self.position.x, self.position.y))
+            if len(self._streak) > VULVA_STREAK_LEN:
+                self._streak.pop(0)
+            self.position += self._hyperdrive_dir * VULVA_HYPERDRIVE * dt
+            if (self.position.x < -200 or self.position.x > 1480 or
+                    self.position.y < -200 or self.position.y > 920):
+                self.kill()
+
+    def _begin_charge(self, player_pos):
+        to_pl = player_pos - self.position
+        self._hyperdrive_dir = ((-to_pl).normalize() if to_pl.length() > 0
+                                else pygame.Vector2(0, -1))
+        self._charge_timer = VULVA_CHARGE_TIME
+        self._state = "charging"
+
+    def take_damage(self):
+        self.health     -= 1
+        self.flash_timer = VULVA_FLASH_DUR
+        if self.health <= 0:
+            self.kill()
+            return True
+        return False

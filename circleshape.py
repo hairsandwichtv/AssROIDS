@@ -1,7 +1,7 @@
 import pygame
 
 # Set to True to draw collision circles on all objects for debugging
-DEBUG_HITBOXES = False
+DEBUG_HITBOXES = True
 
 # Base class for game objects
 class CircleShape(pygame.sprite.Sprite):

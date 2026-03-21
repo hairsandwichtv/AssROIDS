@@ -26,6 +26,8 @@ class Asteroid(CircleShape):
         self._cached_angle = None
         self._cos_a        = 1.0
         self._sin_a        = 0.0
+        self.grace_timer   = 0.0
+        self.spin_rate     = 0.0   # deg/s override — used when velocity is zero
 
         base_img = POOP_IMG if not self.is_butt else BUTT_IMG
         size = int(radius * 2)
@@ -129,9 +131,14 @@ class Asteroid(CircleShape):
         screen.blit(rotated, rotated.get_rect(center=(self.position.x, self.position.y)))
 
     def update(self, dt):
+        if self.grace_timer > 0:
+            self.grace_timer = max(0.0, self.grace_timer - dt)
         self.position += self.velocity * dt
         if not self.is_butt:
-            self.angle = (self.angle + self.velocity.length() * dt * 2) % 360
+            if self.velocity.length() > 0:
+                self.angle = (self.angle + self.velocity.length() * dt * 2) % 360
+            elif self.spin_rate != 0:
+                self.angle = (self.angle + self.spin_rate * dt) % 360
         self._update_trig()
 
     def split(self):
@@ -144,4 +151,5 @@ class Asteroid(CircleShape):
         for rot, vel in [(angle, self.velocity.rotate(angle)),
                          (-angle, self.velocity.rotate(-angle))]:
             a = Asteroid(self.position.x, self.position.y, new_radius)
-            a.velocity = vel * 1.2
+            a.velocity    = vel * 1.2
+            a.grace_timer = 0.4   # 0.4s grace — prevents instant re-collision
