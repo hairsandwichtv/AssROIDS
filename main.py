@@ -280,6 +280,9 @@ def main():
 
     menu_bg_original = pygame.image.load(asset_path("AssROIDS Menu BG.png")).convert()
     menu_bg          = pygame.transform.scale(menu_bg_original, internal_res)
+    shield_icon      = pygame.transform.rotate(
+        pygame.transform.scale(
+            pygame.image.load(asset_path("shield.png")).convert_alpha(), (20, 20)), 180)
 
 
     if audio_enabled:
@@ -685,10 +688,16 @@ def main():
             for powerup in list(powerups):
                 if powerup.collides_with(player):
                     if powerup.kind == "condom":
-                        if player.has_shield:
+                        if player.shield_count >= 2:
+                            # Already double wrapped — award 50 points
                             score += 50
+                            particles.spawn_score_pop(
+                                powerup.position.x, powerup.position.y,
+                                text="+50", color=(100, 200, 255))
                         else:
                             player.activate_shield()
+                            if player.shield_count == 2:
+                                particles.spawn_double_wrapped()
                         if audio_enabled: swoosh_sound.play()
                     elif powerup.kind == "zinc":
                         player.activate_milk_beam()
@@ -1049,8 +1058,13 @@ def main():
             draw_boss_sauce(internal_surf, 980, 50, 250, 25, butts_busted, font)
             hud_y = 50
             if player.has_shield:
-                shield_txt = small_font.render("SHIELD ACTIVE", True, (100, 200, 255))
+                label = "DOUBLE WRAPPED" if player.shield_count == 2 else "SHIELD ACTIVE"
+                color = (100, 255, 150) if player.shield_count == 2 else (100, 200, 255)
+                shield_txt = small_font.render(label, True, color)
                 internal_surf.blit(shield_txt, (20, hud_y))
+                # Draw shield icons
+                for i in range(player.shield_count):
+                    internal_surf.blit(shield_icon, (20 + shield_txt.get_width() + 6 + i * 24, hud_y))
                 hud_y += 24
             if player.is_firing_beam:
                 secs_left = math.ceil(player.milk_beam_timer)

@@ -203,9 +203,36 @@ class PersonalBestPop:
                      (int(self.x) - self._surf.get_width() // 2, int(self.y)))
 
 
-# ---------------------------------------------------------------------------
-# Shooting Star (Meteor)
-# ---------------------------------------------------------------------------
+class DoubleWrappedPop:
+    def __init__(self, x, y):
+        _init_fonts()
+        self.x     = x
+        self.y     = y
+        self.timer = 0.0
+        self.life  = 2.2
+        self.vy    = -28
+        self.alive = True
+        self._surf = None
+        self._last_color = None
+
+    def update(self, dt):
+        self.timer += dt
+        self.y     += self.vy * dt
+        self.vy    *= 0.97
+        if self.timer >= self.life:
+            self.alive = False
+
+    def draw(self, surface):
+        frac  = self.timer / self.life
+        alpha = int(255 * (1.0 - frac ** 2))
+        pulse = abs(math.sin(self.timer * 7))
+        color = (int(100 + 155 * pulse), 255, int(100 + 155 * (1 - pulse)))
+        if color != self._last_color:
+            self._surf       = _font_best.render("✓ DOUBLE WRAPPED!", True, color)
+            self._last_color = color
+        self._surf.set_alpha(alpha)
+        surface.blit(self._surf,
+                     (int(self.x) - self._surf.get_width() // 2, int(self.y)))
 class ShootingStar:
     def __init__(self):
         edge = random.randint(0, 1)
@@ -298,6 +325,7 @@ class ParticleManager:
         self.meteors          = []
         self.boss_explosions  = []
         self.personal_bests   = []
+        self.double_wrapped   = []
         self.metal_explosions = []
         self._last_milestone  = 0
         self._pb_shown        = False
@@ -309,6 +337,7 @@ class ParticleManager:
         self.meteors          = []
         self.boss_explosions  = []
         self.personal_bests   = []
+        self.double_wrapped   = []
         self.metal_explosions = []
         self._last_milestone  = 0
         self._pb_shown        = False
@@ -326,6 +355,9 @@ class ParticleManager:
         if not self._pb_shown and score > high_score:
             self._pb_shown = True
             self.personal_bests.append(PersonalBestPop(640, 300))
+
+    def spawn_double_wrapped(self):
+        self.double_wrapped.append(DoubleWrappedPop(640, 280))
 
     def spawn_metal_explosion(self, x, y):
         """60 metal/spark particles for enemy ship death."""
@@ -390,6 +422,7 @@ class ParticleManager:
         self.meteors          = tick(self.meteors)
         self.boss_explosions  = tick(self.boss_explosions)
         self.personal_bests   = tick(self.personal_bests)
+        self.double_wrapped   = tick(self.double_wrapped)
         self.metal_explosions = tick(self.metal_explosions)
 
     # -- Draw --
@@ -409,4 +442,6 @@ class ParticleManager:
         for p in self.score_pops:
             p.draw(surface)
         for p in self.personal_bests:
+            p.draw(surface)
+        for p in self.double_wrapped:
             p.draw(surface)

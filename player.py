@@ -27,7 +27,7 @@ class Player(CircleShape):
         self.shield_image   = pygame.transform.scale(SHIELD_IMG, (size, size)).convert_alpha()
 
         # --- Power-up states ---
-        self.has_shield       = False
+        self.shield_count     = 0   # 0=none, 1=condom, 2=double wrapped
         self.invincible_timer = 0.0
 
         self.milk_beam_active = False
@@ -48,12 +48,17 @@ class Player(CircleShape):
     # ------------------------------------------------------------------
     # Power-up helpers
     # ------------------------------------------------------------------
+    @property
+    def has_shield(self):
+        return self.shield_count > 0
+
     def activate_shield(self):
-        self.has_shield = True
+        if self.shield_count < 2:
+            self.shield_count += 1
 
     def consume_shield(self):
-        """Remove shield and start the post-hit invincibility window."""
-        self.has_shield       = False
+        """Decrement shield count; always start invincibility window after a hit."""
+        self.shield_count     = max(0, self.shield_count - 1)
         self.invincible_timer = INVINCIBLE_DURATION
 
     def is_invincible(self):
