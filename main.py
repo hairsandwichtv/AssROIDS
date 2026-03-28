@@ -559,8 +559,12 @@ def main():
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
             for obj in updatable:
-                if obj is not player and obj not in mandingos and obj not in vulvas:
+                if obj is not player and obj not in mandingos and obj not in vulvas and obj not in bosses:
                     obj.update(dt)
+
+            # Bosses need player position for special attacks
+            for boss in list(bosses):
+                boss.update(dt, player.position)
 
             # Mandingo needs player position and shot group — updated separately
             for m in list(mandingos):
@@ -708,10 +712,12 @@ def main():
                     powerup.kill()
 
             for boss in list(bosses):
-                dx = player.position.x - boss.position.x
-                dy = player.position.y - boss.position.y
-                base_angle = math.degrees(math.atan2(-dy, dx)) + 180
-                boss.angle = base_angle + (90 if boss.skin == "coinpurse" else 0)
+                # Only auto-rotate toward player when not running a special attack
+                if boss.special_state in ("idle", "cooldown"):
+                    dx = player.position.x - boss.position.x
+                    dy = player.position.y - boss.position.y
+                    base_angle = math.degrees(math.atan2(-dy, dx)) + 180
+                    boss.angle = base_angle + (90 if boss.skin == "coinpurse" else 0)
                 if boss.collides_with(player) and not player.is_invincible():
                     if player.has_shield:
                         player.consume_shield()
@@ -734,6 +740,24 @@ def main():
                                 asteroids, score, audio_enabled,
                                 poop_splat_sound, boss_death_sound,
                                 shake_timer, SHAKE_DURATION)
+
+                # Dick Butt laser hits player
+                if boss.laser_hits(player) and not player.is_invincible():
+                    if player.has_shield:
+                        player.consume_shield()
+                        if audio_enabled: rubber_pop_sound.play()
+                    else:
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled, death_sound, death_sfx_length)
+                        sus_playing = False
+                        state = "DYING"
+
+                # TitVag suction pull
+                pull = boss.get_suction_force()
+                if pull > 0:
+                    to_boss = boss.position - player.position
+                    if to_boss.length() > 1:
+                        player.position += to_boss.normalize() * pull * dt
 
             if player.is_firing_beam:
                 beam_damage_timer -= dt
