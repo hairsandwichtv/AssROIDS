@@ -16,7 +16,7 @@ from asteroidfield import AsteroidField
 from shot import Shot
 from button import Button
 from boss import Boss
-from enemy_ship import MandingoShip, MandingoShot, VulvaShip
+from enemy_ship import MandingoShip, MandingoShot, VulvaShip, GoldenSuppository
 from powerup import PowerUp
 from circleshape import DEBUG_HITBOXES
 
@@ -236,6 +236,16 @@ def player_death(score, high_score, audio_enabled, death_sound, death_sfx_length
         death_sound.play()
     return high_score, death_sfx_length
 
+def maybe_spawn_suppository(asteroid, suppositories, hardness):
+    """1% chance to spawn a Golden Suppository when a small butt is destroyed."""
+    if (asteroid.is_butt and
+            asteroid.visual_radius <= ASTEROID_MIN_RADIUS * 2 and
+            random.random() < 0.50):
+        speed    = 400.0 * hardness
+        velocity = pygame.Vector2(speed, 0).rotate(random.uniform(0, 360))
+        GoldenSuppository(asteroid.position.x, asteroid.position.y, velocity)
+
+
 def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
                      boss_death_sound, shake_timer, SHAKE_DURATION):
     """Shared logic for when any boss dies — clear field, boost speed, return updated score and shake_timer."""
@@ -381,6 +391,7 @@ def main():
     mandingos      = pygame.sprite.Group()
     mandingo_shots = pygame.sprite.Group()
     vulvas               = pygame.sprite.Group()
+    suppositories        = pygame.sprite.Group()
     vulva_engine_ch      = None
     vulva_engine_playing = False
 
@@ -483,6 +494,7 @@ def main():
                 mandingos.empty()
                 mandingo_shots.empty()
                 vulvas.empty()
+                suppositories.empty()
                 anti_turtle_timer       = ANTI_TURTLE_BASE
                 mandingo_engine_playing = False
                 vulva_engine_playing    = False
@@ -501,6 +513,7 @@ def main():
                 MandingoShip.containers = (mandingos,      updatable, drawable)
                 MandingoShot.containers = (mandingo_shots, updatable, drawable)
                 VulvaShip.containers    = (vulvas,         updatable, drawable)
+                GoldenSuppository.containers = (suppositories, updatable, drawable)
                 player        = Player(1280 / 2, 720 / 2)
                 asteroid_field = AsteroidField()
                 asteroid_field.butt_delay = 15.0  # suppressed until first shot or 15s elapses
@@ -559,12 +572,15 @@ def main():
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
             for obj in updatable:
-                if obj is not player and obj not in mandingos and obj not in vulvas and obj not in bosses:
+                if obj is not player and obj not in mandingos and obj not in vulvas and obj not in bosses and obj not in suppositories:
                     obj.update(dt)
 
             # Bosses need player position for special attacks
             for boss in list(bosses):
                 boss.update(dt, player.position)
+
+            for supp in list(suppositories):
+                supp.update(dt, AsteroidField.speed_multiplier)
 
             # Mandingo needs player position and shot group — updated separately
             for m in list(mandingos):
@@ -789,6 +805,7 @@ def main():
                             particles.check_meteor_shower(score)
                             particles.check_personal_best(score, high_score)
                             asteroid.split()
+                            maybe_spawn_suppository(asteroid, suppositories, AsteroidField.speed_multiplier)
                     for boss in list(bosses):
                         if beam_hits_circle(player, boss):
                             if boss.take_damage():
@@ -856,6 +873,7 @@ def main():
                         particles.check_personal_best(score, high_score)
                         shot.kill()
                         asteroid.split()
+                        maybe_spawn_suppository(asteroid, suppositories, AsteroidField.speed_multiplier)
                         break
 
             # ---------------------------------------------------------------
@@ -895,6 +913,7 @@ def main():
                                 asteroid.position.x, asteroid.position.y,
                                 is_butt=(asteroid.radius > 20))
                             asteroid.split()
+                            maybe_spawn_suppository(asteroid, suppositories, AsteroidField.speed_multiplier)
                     # Also damages boss — once per shot, 3 HP
                     for boss in list(bosses):
                         if id(boss) not in mshot.hit_ids and mshot.collides_with(boss):
@@ -923,6 +942,7 @@ def main():
                             asteroid.position.x, asteroid.position.y,
                             is_butt=(asteroid.radius > 20))
                         asteroid.split()
+                        maybe_spawn_suppository(asteroid, suppositories, AsteroidField.speed_multiplier)
 
                 # Player shots hit Mandingo
                 for shot in list(shots):
@@ -993,6 +1013,7 @@ def main():
                             asteroid.position.x, asteroid.position.y,
                             is_butt=(asteroid.radius > 20))
                         asteroid.split()
+                        maybe_spawn_suppository(asteroid, suppositories, AsteroidField.speed_multiplier)
 
                 # Vulva hits bosses — 3 HP once per frame per boss
                 for boss in list(bosses):
@@ -1041,6 +1062,48 @@ def main():
                             if audio_enabled: explosion_sfx.play()
                             particles.check_personal_best(score, high_score)
                             particles.check_meteor_shower(score)
+
+            # ── Golden Suppository collisions ─────────────────────────────────────
+            for supp in list(suppositories):
+                if not supp.alive():
+                    continue
+                # Player body hits suppository
+                if supp.collides_with(player) and not player.is_invincible():
+                    if player.has_shield:
+                        player.consume_shield()
+                        if audio_enabled: rubber_pop_sound.play()
+                    else:
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled,
+                            death_sound, death_sfx_length)
+                        sus_playing = False
+                        state = "DYING"
+                # Player shots hit suppository
+                for shot in list(shots):
+                    if supp.collides_with(shot):
+                        shot.kill()
+                        total_shots_fired -= 1
+                        if supp.take_damage():
+                            score += 100
+                            particles.spawn_score_pop(
+                                supp.position.x, supp.position.y - 20,
+                                text="+100", color=(255, 220, 0))
+                            particles.spawn_metal_explosion(
+                                supp.position.x, supp.position.y)
+                            particles.check_personal_best(score, high_score)
+                            particles.check_meteor_shower(score)
+                        break
+                # Beam hits suppository
+                if player.is_firing_beam and beam_hits_circle(player, supp):
+                    if supp.take_damage():
+                        score += 100
+                        particles.spawn_score_pop(
+                            supp.position.x, supp.position.y - 20,
+                            text="+100", color=(255, 220, 0))
+                        particles.spawn_metal_explosion(
+                            supp.position.x, supp.position.y)
+                        particles.check_personal_best(score, high_score)
+                        particles.check_meteor_shower(score)
 
             spice_level = max(0, total_shots_fired - spice_score)
 

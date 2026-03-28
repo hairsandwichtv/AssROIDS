@@ -553,3 +553,116 @@ class VulvaShip(CircleShape):
             self.kill()
             return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# Golden Suppository
+# ---------------------------------------------------------------------------
+SUPP_RADIUS   = 14
+SUPP_SPEED    = 400.0
+SUPP_LIFETIME = 9.0
+SUPP_STREAK   = 20
+
+SUPP_IMG = pygame.image.load(asset_path("Golden Suppository.png"))
+
+
+class GoldenSuppository(CircleShape):
+    def __init__(self, x, y, velocity):
+        super().__init__(x, y, SUPP_RADIUS)
+        self.velocity        = pygame.Vector2(velocity)
+        self.health          = 1
+        self.angle           = 0.0
+        self.invincible      = 0.5      # invincibility timer on spawn
+        self._bound_timer    = SUPP_LIFETIME
+        self._streak         = []
+        self._cos_a          = 1.0
+        self._sin_a          = 0.0
+
+        size = SUPP_RADIUS * 2
+        self.original_image = pygame.transform.scale(
+            SUPP_IMG, (size, size)
+        ).convert_alpha()
+
+    def _update_angle(self):
+        if self.velocity.length() > 0:
+            self.angle = _math.degrees(
+                _math.atan2(-self.velocity.y, self.velocity.x)) + 90
+        rad = _math.radians(-self.angle)
+        self._cos_a = _math.cos(rad)
+        self._sin_a = _math.sin(rad)
+
+    def draw(self, screen):
+        # White streak trail
+        if len(self._streak) > 1:
+            n = len(self._streak)
+            for i in range(n - 1):
+                frac  = i / n
+                alpha = int(180 * frac)
+                width = max(1, int(3 * frac))
+                p1 = (int(self._streak[i][0]),     int(self._streak[i][1]))
+                p2 = (int(self._streak[i + 1][0]), int(self._streak[i + 1][1]))
+                surf = pygame.Surface((1280, 720), pygame.SRCALPHA)
+                pygame.draw.line(surf, (255, 255, 255, alpha), p1, p2, width)
+                screen.blit(surf, (0, 0))
+
+        rotated = pygame.transform.rotate(self.original_image, self.angle)
+        rect    = rotated.get_rect(center=(int(self.position.x), int(self.position.y)))
+        screen.blit(rotated, rect.topleft)
+
+        # Flash while invincible
+        if self.invincible > 0 and (pygame.time.get_ticks() // 80) % 2 == 0:
+            mask      = pygame.mask.from_surface(rotated)
+            mask_surf = mask.to_surface(setcolor=(255, 220, 0, 160),
+                                        unsetcolor=(0, 0, 0, 0))
+            screen.blit(mask_surf, rect.topleft)
+
+    def update(self, dt, hardness):
+        if self.invincible > 0:
+            self.invincible = max(0.0, self.invincible - dt)
+
+        # Record streak position
+        self._streak.append((self.position.x, self.position.y))
+        if len(self._streak) > SUPP_STREAK:
+            self._streak.pop(0)
+
+        # Move
+        self.position += self.velocity * dt
+
+        self._bound_timer -= dt
+        if self._bound_timer > 0:
+            # Bounce off edges with chaotic angle variation
+            bounced = False
+            if self.position.x < self.radius:
+                self.position.x = self.radius
+                self.velocity.x = abs(self.velocity.x)
+                bounced = True
+            elif self.position.x > 1280 - self.radius:
+                self.position.x = 1280 - self.radius
+                self.velocity.x = -abs(self.velocity.x)
+                bounced = True
+            if self.position.y < self.radius:
+                self.position.y = self.radius
+                self.velocity.y = abs(self.velocity.y)
+                bounced = True
+            elif self.position.y > 720 - self.radius:
+                self.position.y = 720 - self.radius
+                self.velocity.y = -abs(self.velocity.y)
+                bounced = True
+            if bounced:
+                # Chaotic angle change on bounce
+                self.velocity = self.velocity.rotate(random.uniform(-35, 35))
+                # Maintain constant speed
+                self.velocity = self.velocity.normalize() * SUPP_SPEED * hardness
+        else:
+            # Unbound — despawn when off screen
+            if (self.position.x < -60 or self.position.x > 1340 or
+                    self.position.y < -60 or self.position.y > 780):
+                self.kill()
+
+        self._update_angle()
+
+    def take_damage(self):
+        if self.invincible > 0:
+            return False
+        self.kill()
+        return True

@@ -51,6 +51,7 @@ a = Analysis(
         ('Vulva Enter SFX.mp3',         '.'),
         ('Vulva Engine SFX.mp3',        '.'),
         ('shield.png',                  '.'),
+        ('Golden Suppository.png',      '.'),
         ('Explosion - SFX.mp3',         '.'),
     ],
     hiddenimports=[],
