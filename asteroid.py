@@ -3,7 +3,6 @@ import math
 import random
 from circleshape import CircleShape, DEBUG_HITBOXES
 from constants import ASTEROID_MIN_RADIUS
-from logger import log_event
 from asset_helper import asset_path
 
 BUTT_IMG = pygame.image.load(asset_path("butt.png"))
@@ -145,7 +144,6 @@ class Asteroid(CircleShape):
         self.kill()
         if not self.is_butt:
             return
-        log_event("asteroid_split")
         angle      = random.uniform(20, 50)
         new_radius = self.visual_radius - ASTEROID_MIN_RADIUS
         for rot, vel in [(angle, self.velocity.rotate(angle)),

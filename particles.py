@@ -18,12 +18,14 @@ def _init_fonts():
         _font_best = pygame.font.SysFont("Arial", 22, bold=True)
 
 
+_circle_surf_cache = {}   # (diameter) → Surface
+
 def _draw_circle_alpha(surface, color, pos, radius, alpha):
-    """Draw a filled circle with alpha directly onto surface without
-    allocating a new Surface each call — uses a shared small surface."""
+    """Draw a filled circle with alpha, using a cached surface per radius."""
     d = radius * 2
-    key = (d, d)
-    s = pygame.Surface(key, pygame.SRCALPHA)
+    if d not in _circle_surf_cache:
+        _circle_surf_cache[d] = pygame.Surface((d, d), pygame.SRCALPHA)
+    s = _circle_surf_cache[d]
     s.fill((0, 0, 0, 0))
     pygame.draw.circle(s, (*color, alpha), (radius, radius), radius)
     surface.blit(s, (pos[0] - radius, pos[1] - radius))

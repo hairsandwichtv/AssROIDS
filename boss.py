@@ -159,7 +159,7 @@ class Boss(CircleShape):
                     self._ellipse_hit_local(cos_a, sin_a, lcx, lcy, la, lb, other) or
                     self._tri_circle_hit(tri, other))
         elif self.skin != "coinpurse":
-            return self.position.distance_to(other.position) <= (self.radius + other.radius)
+            return self.position.distance_squared_to(other.position) <= (self.radius + other.radius) ** 2
         cx, cy, cos_a, sin_a, a, b, c1, c2, cr = self._coinpurse_shapes()
         r  = other.radius
         ox, oy = other.position.x, other.position.y
@@ -255,7 +255,6 @@ class Boss(CircleShape):
                 rad     = math.radians(self.angle - 180)
                 origin  = pygame.Vector2(cx + math.cos(rad) * self.visual_radius * 0.55,
                                          cy - math.sin(rad) * self.visual_radius * 0.55)
-                t_now   = pygame.time.get_ticks() / 1000.0
                 for _ in range(35):
                     t      = random.uniform(0, 700)
                     jitter = pygame.Vector2(random.randint(-8, 8), random.randint(-8, 8))

@@ -5,6 +5,16 @@ from circleshape import CircleShape, DEBUG_HITBOXES
 from asset_helper import asset_path
 from constants import PLAYER_RADIUS, PLAYER_SPEED
 
+# Shared full-screen SRCALPHA surface — reused each frame instead of reallocated
+_STREAK_SURF = None
+
+def _get_streak_surf():
+    global _STREAK_SURF
+    if _STREAK_SURF is None:
+        _STREAK_SURF = pygame.Surface((1280, 720), pygame.SRCALPHA)
+    return _STREAK_SURF
+
+
 # ---------------------------------------------------------------------------
 # Mandingo constants
 # ---------------------------------------------------------------------------
@@ -339,7 +349,8 @@ class VulvaShip(CircleShape):
                 w_out = max(1, int(20 * frac))
                 p1 = (int(self._streak[i][0]),     int(self._streak[i][1]))
                 p2 = (int(self._streak[i + 1][0]), int(self._streak[i + 1][1]))
-                glow_surf = pygame.Surface((1280, 720), pygame.SRCALPHA)
+                glow_surf = _get_streak_surf()
+                glow_surf.fill((0, 0, 0, 0))
                 pygame.draw.line(glow_surf, (r_out, g_out, b_out, int(60 * frac)),
                                  p1, p2, w_out)
                 screen.blit(glow_surf, (0, 0))
@@ -473,7 +484,7 @@ class VulvaShip(CircleShape):
                 return
             self._move_toward(self._current_anchor, speed, dt, avoid_pos=player_pos)
             self._clamp_to_screen()
-            if self.position.distance_to(self._current_anchor) < 12:
+            if self.position.distance_squared_to(self._current_anchor) < 144:
                 self._state = "hunting"
             return
 
@@ -518,7 +529,7 @@ class VulvaShip(CircleShape):
                 return
             self._move_toward(self._current_anchor, speed, dt, avoid_pos=player_pos)
             self._clamp_to_screen()
-            if self.position.distance_to(self._current_anchor) < 12:
+            if self.position.distance_squared_to(self._current_anchor) < 144:
                 self._state = "hunting"
             return
 
@@ -601,9 +612,10 @@ class GoldenSuppository(CircleShape):
                 width = max(1, int(3 * frac))
                 p1 = (int(self._streak[i][0]),     int(self._streak[i][1]))
                 p2 = (int(self._streak[i + 1][0]), int(self._streak[i + 1][1]))
-                surf = pygame.Surface((1280, 720), pygame.SRCALPHA)
-                pygame.draw.line(surf, (255, 255, 255, alpha), p1, p2, width)
-                screen.blit(surf, (0, 0))
+                streak_surf = _get_streak_surf()
+                streak_surf.fill((0, 0, 0, 0))
+                pygame.draw.line(streak_surf, (255, 255, 255, alpha), p1, p2, width)
+                screen.blit(streak_surf, (0, 0))
 
         rotated = pygame.transform.rotate(self.original_image, self.angle)
         rect    = rotated.get_rect(center=(int(self.position.x), int(self.position.y)))

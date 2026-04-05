@@ -5,6 +5,7 @@ import json
 import subprocess
 import math
 import random
+
 from starfield import Starfield
 from nebula import Nebula
 from particles import ParticleManager
@@ -17,6 +18,8 @@ from shot import Shot
 from button import Button
 from boss import Boss
 from enemy_ship import MandingoShip, MandingoShot, VulvaShip, GoldenSuppository
+from tapeworm import WormHole, TapewormHead, TapewormSegment, create_tapeworm, WORMHOLE_VISUAL_R, WORMHOLE_SPAWN_PCT, SEG_RADIUS, point_in_triangle, set_audio_enabled
+import tapeworm as _tapeworm_module
 from powerup import PowerUp
 from circleshape import DEBUG_HITBOXES
 
@@ -26,6 +29,14 @@ from circleshape import DEBUG_HITBOXES
 POWERUP_SPAWN_BASE   = 20.0
 BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
+_GALAXY_END_SIZE     = int(math.hypot(1280, 720) * 2)  # pre-computed diagonal
+
+class _FakeCircle:
+    """Lightweight stand-in for beam_hits_circle checks against non-sprite objects."""
+    __slots__ = ('position', 'radius')
+    def __init__(self, pos, r):
+        self.position = pos
+        self.radius   = r
 
 HIGHSCORE_FILE = writable_path("highscore.txt")
 SETTINGS_FILE  = writable_path("settings.json")
@@ -155,10 +166,14 @@ def draw_milk_beam(surface, player):
             if 0 <= pos.x <= 1280 and 0 <= pos.y <= 720:
                 pygame.draw.circle(surface, color, (int(pos.x), int(pos.y)), size)
 
+_SETTINGS_OVERLAY = None
+
 def draw_settings_menu(surface, settings, font, small_font, waiting_for_key):
-    overlay = pygame.Surface((1280, 720), pygame.SRCALPHA)
-    overlay.fill((0, 0, 0, 180))
-    surface.blit(overlay, (0, 0))
+    global _SETTINGS_OVERLAY
+    if _SETTINGS_OVERLAY is None:
+        _SETTINGS_OVERLAY = pygame.Surface((1280, 720), pygame.SRCALPHA)
+        _SETTINGS_OVERLAY.fill((0, 0, 0, 180))
+    surface.blit(_SETTINGS_OVERLAY, (0, 0))
     panel_rect = pygame.Rect(340, 140, 600, 420)
     pygame.draw.rect(surface, (30, 30, 40),    panel_rect, border_radius=12)
     pygame.draw.rect(surface, (255, 255, 255), panel_rect, 2, border_radius=12)
@@ -240,19 +255,21 @@ def maybe_spawn_suppository(asteroid, suppositories, hardness):
     """1% chance to spawn a Golden Suppository when a small butt is destroyed."""
     if (asteroid.is_butt and
             asteroid.visual_radius <= ASTEROID_MIN_RADIUS * 2 and
-            random.random() < 0.50):
+            random.random() < 0.01):
         speed    = 400.0 * hardness
         velocity = pygame.Vector2(speed, 0).rotate(random.uniform(0, 360))
         GoldenSuppository(asteroid.position.x, asteroid.position.y, velocity)
 
 
 def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
-                     boss_death_sound, shake_timer, SHAKE_DURATION):
+                     boss_death_sound, shake_timer, SHAKE_DURATION,
+                     wormholes=None, spice_level=0, boss_pos=None):
     """Shared logic for when any boss dies — clear field, boost speed, return updated score and shake_timer."""
     if audio_enabled: boss_death_sound.play()
     shake_timer = SHAKE_DURATION
     AsteroidField.speed_multiplier      *= 1.15
     AsteroidField.spawn_rate_multiplier *= 1.15
+    wormhole_spawned = wormholes is not None and len(wormholes) > 0
     for asteroid in list(asteroids):
         if asteroid.radius <= ASTEROID_MIN_RADIUS:
             score += 1
@@ -261,6 +278,14 @@ def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
             asteroid.split()
     for asteroid in asteroids:
         asteroid.velocity *= 1.15
+    # 50% chance to spawn wormhole on boss death if none on screen
+    if not wormhole_spawned and wormholes is not None and random.random() < 0.50:
+        wx = boss_pos.x if boss_pos else 640
+        wy = boss_pos.y if boss_pos else 360
+        # Clamp to screen
+        wx = max(80, min(1200, wx))
+        wy = max(80, min(640, wy))
+        WormHole(wx, wy)
     return score, shake_timer
 
 # ---------------------------------------------------------------------------
@@ -274,6 +299,7 @@ def main():
     try:
         pygame.mixer.init()
         audio_enabled = True
+        set_audio_enabled(True)
     except pygame.error:
         audio_enabled = False
 
@@ -296,7 +322,68 @@ def main():
 
 
     if audio_enabled:
-        pygame.mixer.set_num_channels(16)
+        croak_channel   = None
+        lullaby_channel = None
+        lullaby_sound   = None
+        rainbow_tune    = None
+        credits_tune    = None
+        am_jam_sounds     = []
+        space_amb_sound   = None
+        space_amb_channel = None
+        am_jam_paused   = False   # True while tapeworm is alive
+        am_jam_waiting  = False   # True while waiting for rainbow tune to finish
+        croak_playing   = False
+        lullaby_playing = False
+        try:
+            pygame.mixer.set_num_channels(16)
+            croak_channel     = pygame.mixer.Channel(15)
+            lullaby_channel   = pygame.mixer.Channel(14)
+            space_amb_channel = pygame.mixer.Channel(12)
+            am_jam_sounds = [asset_path(f"Am Jam {_i}.mp3") for _i in range(1, 10)
+                             if os.path.exists(asset_path(f"Am Jam {_i}.mp3"))]
+
+            # --- Splash screen while long sounds load ---
+            splash_font = pygame.font.SysFont("Arial", 36, bold=True)
+            splash_small = pygame.font.SysFont("Arial", 20)
+            splash_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            splash_surf.fill((0, 0, 0))
+            title = splash_font.render("AssROIDS", True, (255, 255, 255))
+            loading = splash_small.render("Loading...", True, (180, 180, 180))
+            splash_surf.blit(title,   title.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 60)))
+            splash_surf.blit(loading, loading.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 10)))
+
+            disclaimer_lines = [
+                "AssROIDS is a passion project developed by HairSandwichTV as they learned to Code,",
+                "Algorithms and Data Structures, Systems Architecture, and Networking.",
+                "It is designed as a free-to-play parody project for entertainment purposes only.",
+                "It is not intended to be viewed as homo-erotica, or as an insult to any unnamed communities.",
+                "Please enjoy at your own discretion.  Glurp!",
+            ]
+            disc_font = pygame.font.SysFont("Arial", 14)
+            for i, line in enumerate(disclaimer_lines):
+                surf = disc_font.render(line, True, (120, 120, 120))
+                splash_surf.blit(surf, surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 40 + i * 20)))
+
+            screen.blit(splash_surf, (0, 0))
+            pygame.display.flip()
+
+            # Pre-load tapeworm images and pre-populate all 360 segment rotations
+            # so there's no hitch when the first tapeworm spawns mid-game
+            _tapeworm_module._load_images()
+            for _deg in range(360):
+                _tapeworm_module._get_seg_rotated(_deg)
+
+            # Now load the long sounds — splash is visible during this delay
+            lullaby_sound   = pygame.mixer.Sound(asset_path("Razor Lullaby.mp3"))
+            lullaby_sound.set_volume(0.6)
+            space_amb_sound = pygame.mixer.Sound(asset_path("Space Amb.mp3"))
+            space_amb_sound.set_volume(0.5)
+            rainbow_tune    = pygame.mixer.Sound(asset_path("Rainbow Hole Tune.mp3"))
+            rainbow_tune.set_volume(0.8)
+            credits_tune    = pygame.mixer.Sound(asset_path("Credits Tune.mp3"))
+            credits_tune.set_volume(0.2)
+        except Exception:
+            pass
         pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
         _pre_settings = load_settings()
         _vol = _pre_settings.get("master_volume", 1.0)
@@ -384,6 +471,7 @@ def main():
 
     updatable = pygame.sprite.Group()
     drawable  = pygame.sprite.Group()
+    standard_updatable = pygame.sprite.Group()  # shots, asteroids, powerups, field only
     asteroids      = pygame.sprite.Group()
     shots          = pygame.sprite.Group()
     bosses         = pygame.sprite.Group()
@@ -392,6 +480,13 @@ def main():
     mandingo_shots = pygame.sprite.Group()
     vulvas               = pygame.sprite.Group()
     suppositories        = pygame.sprite.Group()
+    wormholes            = pygame.sprite.Group()
+    tapeworm_heads       = pygame.sprite.Group()
+    galaxy_timer         = 0.0
+    GALAXY_DURATION      = 3.5
+    WARP_FLASH_DURATION  = 1.0
+    warp_flash_timer     = 0.0
+    warp_flash_wormhole  = None   # WormHole sprite reference during flash
     vulva_engine_ch      = None
     vulva_engine_playing = False
 
@@ -467,7 +562,7 @@ def main():
                 if audio_enabled:
                     blast_off_sound.play()
                     pygame.mixer.music.stop()
-                updatable.empty(); drawable.empty()
+                updatable.empty(); drawable.empty(); standard_updatable.empty()
                 asteroids.empty(); shots.empty()
                 bosses.empty();    powerups.empty()
                 score             = 0
@@ -495,6 +590,8 @@ def main():
                 mandingo_shots.empty()
                 vulvas.empty()
                 suppositories.empty()
+                wormholes.empty()
+                tapeworm_heads.empty()
                 anti_turtle_timer       = ANTI_TURTLE_BASE
                 mandingo_engine_playing = False
                 vulva_engine_playing    = False
@@ -504,21 +601,27 @@ def main():
                     mandingo_charge_sound.stop()
                 if audio_enabled and vulva_engine_ch:
                     vulva_engine_ch.stop()
-                Shot.containers       = (shots,          updatable, drawable)
-                Asteroid.containers   = (asteroids,      updatable, drawable)
-                AsteroidField.containers = (updatable,)
-                Player.containers     = (updatable,      drawable)
-                Boss.containers       = (bosses,         updatable, drawable)
-                PowerUp.containers    = (powerups,       updatable, drawable)
-                MandingoShip.containers = (mandingos,      updatable, drawable)
-                MandingoShot.containers = (mandingo_shots, updatable, drawable)
-                VulvaShip.containers    = (vulvas,         updatable, drawable)
+                Shot.containers           = (shots,          updatable, drawable, standard_updatable)
+                Asteroid.containers       = (asteroids,      updatable, drawable, standard_updatable)
+                AsteroidField.containers  = (updatable, standard_updatable)
+                Player.containers         = (updatable,      drawable)
+                Boss.containers           = (bosses,         updatable, drawable)
+                PowerUp.containers        = (powerups,       updatable, drawable, standard_updatable)
+                MandingoShip.containers   = (mandingos,      updatable, drawable)
+                MandingoShot.containers   = (mandingo_shots, updatable, drawable, standard_updatable)
+                VulvaShip.containers      = (vulvas,         updatable, drawable)
                 GoldenSuppository.containers = (suppositories, updatable, drawable)
+                WormHole.containers          = (wormholes,      updatable, drawable)
+                TapewormHead.containers      = (tapeworm_heads, updatable, drawable)
                 player        = Player(1280 / 2, 720 / 2)
                 asteroid_field = AsteroidField()
                 asteroid_field.butt_delay = 15.0  # suppressed until first shot or 15s elapses
                 state         = "GAME"
                 first_shot_fired = False
+                am_jam_paused  = False
+                am_jam_waiting = False
+                if audio_enabled and am_jam_sounds:
+                    _am = random.choice(am_jam_sounds); pygame.mixer.music.load(_am); pygame.mixer.music.set_volume(0.3); pygame.mixer.music.play()
                 # Spawn 99 stationary poops, clear of player spawn
                 player_spawn = pygame.Vector2(1280 / 2, 720 / 2)
                 for _ in range(99):
@@ -533,8 +636,8 @@ def main():
                     poop.velocity  = pygame.Vector2(0, 0)
                     poop.spin_rate = random.uniform(-120, 120)  # random rotation
                 if audio_enabled:
-                    pygame.mixer.music.load(asset_path("Space Amb.mp3"))
-                    pygame.mixer.music.play(-1)
+                    if space_amb_channel and space_amb_sound:
+                        space_amb_channel.play(space_amb_sound, loops=-1)
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=True)
 
             if readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
@@ -558,9 +661,7 @@ def main():
 
             keys = pygame.key.get_pressed()
             if keys[Player.shoot_key]:
-                if player.milk_beam_active:
-                    pass  # beam handles damage — no projectile fired
-                else:
+                if not player.milk_beam_active:
                     if player.shoot():
                         total_shots_fired += 1
                         stat_shots_fired_raw += 1
@@ -571,16 +672,80 @@ def main():
 
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
-            for obj in updatable:
-                if obj is not player and obj not in mandingos and obj not in vulvas and obj not in bosses and obj not in suppositories:
-                    obj.update(dt)
+            # Update standard objects (shots, asteroids, powerups, field)
+            for obj in standard_updatable:
+                obj.update(dt)
 
             # Bosses need player position for special attacks
-            for boss in list(bosses):
+            for boss in bosses:
                 boss.update(dt, player.position)
 
-            for supp in list(suppositories):
+            for supp in suppositories:
                 supp.update(dt, AsteroidField.speed_multiplier)
+
+            for wh in wormholes:
+                wh.update(dt)
+
+            for tw in tapeworm_heads:
+                tw.update(dt, player.position, AsteroidField.speed_multiplier)
+
+            # Croaking ambience — loop while any tapeworm alive, stop when none
+            if audio_enabled and _tapeworm_module._snd_croak and croak_channel:
+                if len(tapeworm_heads) > 0:
+                    if not croak_playing:
+                        croak_channel.play(_tapeworm_module._snd_croak, loops=-1)
+                        croak_playing = True
+                elif croak_playing:
+                    croak_channel.stop()
+                    croak_playing = False
+
+            # Razor Lullaby — loop while any wormhole on screen
+            if audio_enabled and lullaby_sound and lullaby_channel:
+                if len(wormholes) > 0:
+                    if not lullaby_playing:
+                        lullaby_channel.play(lullaby_sound, loops=-1)
+                        lullaby_playing = True
+                elif lullaby_playing:
+                    lullaby_channel.stop()
+                    lullaby_playing = False
+
+            # Single wormhole pass — spawn, rainbow check, player entry
+            any_tw_alive = any(tw.alive() for tw in tapeworm_heads) if wormholes else False
+            for wh in list(wormholes):
+                if wh.state == "anchoring":
+                    if not getattr(wh, '_spawned', False):
+                        wh._spawned = True
+                        create_tapeworm(wh, max(0, total_shots_fired - spice_score))
+                        if audio_enabled:
+                            pygame.mixer.music.stop()
+                        am_jam_paused = True
+                    elif not any_tw_alive:
+                        wh.activate_rainbow()
+                elif wh.is_enterable() and wh.player_overlaps(player.position, player.radius):
+                    state = "WARP_FLASH"
+                    warp_flash_timer    = WARP_FLASH_DURATION
+                    warp_flash_wormhole = wh
+                    if audio_enabled and rainbow_tune:
+                        rainbow_tune.play()
+                        am_jam_waiting = True
+                    break
+
+            # Am Jam management — cycle tracks, handle pause/resume
+            if audio_enabled and am_jam_sounds:
+                if am_jam_waiting:
+                    if rainbow_tune and not rainbow_tune.get_num_channels():
+                        am_jam_waiting = False
+                        am_jam_paused  = False
+                        _am = random.choice(am_jam_sounds)
+                        pygame.mixer.music.load(_am)
+                        pygame.mixer.music.set_volume(0.3)
+                        pygame.mixer.music.play()
+                elif not am_jam_paused:
+                    if not pygame.mixer.music.get_busy():
+                        _am = random.choice(am_jam_sounds)
+                        pygame.mixer.music.load(_am)
+                        pygame.mixer.music.set_volume(0.3)
+                        pygame.mixer.music.play()
 
             # Mandingo needs player position and shot group — updated separately
             for m in list(mandingos):
@@ -691,7 +856,7 @@ def main():
                     elif new_boss.skin == "coinpurse":
                         coinpurse_enter_sound.play()
                     if not sus_playing:
-                        dick_sus_sound.set_volume(0.60)
+                        dick_sus_sound.set_volume(0.40)
                         dick_sus_sound.play(loops=-1)
                         sus_playing = True
 
@@ -701,9 +866,8 @@ def main():
 
             powerup_spawn_timer -= dt
             if powerup_spawn_timer <= 0:
-                powerup_spawn_timer = POWERUP_SPAWN_BASE + random.uniform(-5, 5)
+                powerup_spawn_timer = max(POWERUP_SPAWN_BASE + random.uniform(-5, 5), 5.0)
                 PowerUp(random.choice(["condom", "zinc", "dp"]))
-                powerup_spawn_timer = max(powerup_spawn_timer, 5.0)  # never less than 5s gap
 
             for powerup in list(powerups):
                 if powerup.collides_with(player):
@@ -755,7 +919,9 @@ def main():
                             score, shake_timer = boss_death_clear(
                                 asteroids, score, audio_enabled,
                                 poop_splat_sound, boss_death_sound,
-                                shake_timer, SHAKE_DURATION)
+                                shake_timer, SHAKE_DURATION,
+                                wormholes=wormholes, spice_level=spice_level,
+                                boss_pos=boss.position)
 
                 # Dick Butt laser hits player
                 if boss.laser_hits(player) and not player.is_invincible():
@@ -814,7 +980,9 @@ def main():
                                 score, shake_timer = boss_death_clear(
                                     asteroids, score, audio_enabled,
                                     poop_splat_sound, boss_death_sound,
-                                    shake_timer, SHAKE_DURATION)
+                                    shake_timer, SHAKE_DURATION,
+                                wormholes=wormholes, spice_level=spice_level,
+                                boss_pos=boss.position)
                     for mandingo in list(mandingos):
                         if beam_hits_circle(player, mandingo):
                             total_shots_fired -= 1  # don't add to spice
@@ -925,7 +1093,9 @@ def main():
                                     score, shake_timer = boss_death_clear(
                                         asteroids, score, audio_enabled,
                                         poop_splat_sound, boss_death_sound,
-                                        shake_timer, SHAKE_DURATION)
+                                        shake_timer, SHAKE_DURATION,
+                                wormholes=wormholes, spice_level=spice_level,
+                                boss_pos=boss.position)
                                     break
 
                 # Mandingo body collides with asteroids
@@ -1026,7 +1196,9 @@ def main():
                                 score, shake_timer = boss_death_clear(
                                     asteroids, score, audio_enabled,
                                     poop_splat_sound, boss_death_sound,
-                                    shake_timer, SHAKE_DURATION)
+                                    shake_timer, SHAKE_DURATION,
+                                wormholes=wormholes, spice_level=spice_level,
+                                boss_pos=boss.position)
                                 break
 
                 # Player shots hit Vulva
@@ -1105,6 +1277,75 @@ def main():
                         particles.check_personal_best(score, high_score)
                         particles.check_meteor_shower(score)
 
+            # ── Tapeworm collisions ─────────────────────────────────────────
+            for tw in list(tapeworm_heads):
+                if not tw.alive():
+                    continue
+                # Player collides with head
+                if (point_in_triangle(player.position, tw.head_triangle())
+                        and not player.is_invincible()):
+                    if player.has_shield:
+                        player.consume_shield()
+                        if audio_enabled: rubber_pop_sound.play()
+                    else:
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled, death_sound, death_sfx_length)
+                        sus_playing = False
+                        state = "DYING"
+                # Player collides with segments
+                for i, seg in enumerate(list(tw.segments)):
+                    if not seg.alive:
+                        continue
+                    if (player.position.distance_squared_to(seg.position) <= (player.radius + SEG_RADIUS) ** 2
+                            and not player.is_invincible()):
+                        if player.has_shield:
+                            player.consume_shield()
+                            if audio_enabled: rubber_pop_sound.play()
+                        else:
+                            high_score, death_freeze_timer = player_death(
+                                score, high_score, audio_enabled, death_sound, death_sfx_length)
+                            sus_playing = False
+                            state = "DYING"
+                # Player shots hit head
+                for shot in list(shots):
+                    if point_in_triangle(shot.position, tw.head_triangle()):
+                        shot.kill()
+                        total_shots_fired -= 1
+                        if tw.take_damage():
+                            particles.spawn_boss_explosion(tw.position.x, tw.position.y)
+                        break
+                # Player shots hit segments
+                for shot in list(shots):
+                    if not shot.alive():
+                        continue
+                    hit = False
+                    for i, seg in enumerate(list(tw.segments)):
+                        if not seg.alive:
+                            continue
+                        if shot.position.distance_squared_to(seg.position) <= (shot.radius + SEG_RADIUS) ** 2:
+                            shot.kill()
+                            total_shots_fired -= 1
+                            particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
+                            new_head = tw.damage_segment(i, spice_level)
+                            hit = True
+                            break
+                    if hit:
+                        break
+                # Beam hits head
+                if player.is_firing_beam and point_in_triangle(player.position, tw.head_triangle()):
+                    if tw.take_damage():
+                        particles.spawn_boss_explosion(tw.position.x, tw.position.y)
+                # Beam hits segments
+                if player.is_firing_beam:
+                    for i, seg in enumerate(list(tw.segments)):
+                        if not seg.alive:
+                            continue
+                        fc = _FakeCircle(seg.position, SEG_RADIUS)
+                        if beam_hits_circle(player, fc):
+                            particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
+                            new_head = tw.damage_segment(i, spice_level)
+                            break
+
             spice_level = max(0, total_shots_fired - spice_score)
 
             # Update particles (exhaust spawns here too)
@@ -1164,9 +1405,210 @@ def main():
                 internal_surf.blit(dp_txt, (20, hud_y))
 
         # ===================================================================
+        # WARP FLASH — 1 second vortex before galaxy transition
+        # ===================================================================
+        elif state == "WARP_FLASH":
+            warp_flash_timer -= dt
+            progress = 1.0 - max(0.0, warp_flash_timer / WARP_FLASH_DURATION)
+            wh = warp_flash_wormhole
+
+            # Player can still move during flash
+            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
+
+            # Cancel if player leaves wormhole
+            if wh and wh.alive():
+                if not wh.player_overlaps(player.position, player.radius):
+                    state = "GAME"
+                    warp_flash_wormhole = None
+                    warp_flash_timer    = 0.0
+                    # Wormhole stays alive in rainbow state — player can re-enter
+                else:
+                    # Draw game scene
+                    internal_surf.fill((0, 0, 0))
+                    stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
+                    nebula.draw(internal_surf, spice_level)
+                    for obj in drawable:
+                        obj.draw(internal_surf)
+
+                    # Vortex effect — rotating electric rings
+                    if wh:
+                        cx = int(wh.position.x)
+                        cy = int(wh.position.y)
+                        t  = pygame.time.get_ticks() / 1000.0
+
+                        # Expanding rings with rotation
+                        for ring in range(5):
+                            ring_frac = (ring / 5 + progress * 0.4) % 1.0
+                            r         = int(ring_frac * WORMHOLE_VISUAL_R * 3.5)
+                            alpha     = int(200 * (1.0 - ring_frac) * progress)
+                            if r > 0 and alpha > 0:
+                                rc = int(abs(math.sin(t*4 + ring*1.2))*180 + 75)
+                                gc = int(abs(math.sin(t*3 + ring*0.8))*100)
+                                bc = 255
+                                gs = pygame.Surface((r*2+2, r*2+2), pygame.SRCALPHA)
+                                thick = max(1, int(4 * (1.0 - ring_frac)))
+                                pygame.draw.circle(gs, (rc, gc, bc, alpha),
+                                                   (r+1, r+1), r, thick)
+                                internal_surf.blit(gs, (cx-r-1, cy-r-1))
+
+                        # Electric arc spokes
+                        spoke_count = 8
+                        spoke_len   = int(WORMHOLE_VISUAL_R * 2.5 * progress)
+                        alpha       = int(180 * progress)
+                        arc_surf    = pygame.Surface(internal_surf.get_size(), pygame.SRCALPHA)
+                        for s in range(spoke_count):
+                            spoke_angle = (s / spoke_count) * 360 + t * 180
+                            rad         = math.radians(spoke_angle)
+                            jitter      = random.uniform(0.7, 1.0)
+                            ex = int(cx + math.cos(rad) * spoke_len * jitter)
+                            ey = int(cy + math.sin(rad) * spoke_len * jitter)
+                            pygame.draw.line(arc_surf, (150, 100, 255, alpha),
+                                             (cx, cy), (ex, ey), 2)
+                        internal_surf.blit(arc_surf, (0, 0))
+
+                        # Bright white core flash at center
+                        core_r = int(WORMHOLE_VISUAL_R * 0.6 * progress)
+                        if core_r > 0:
+                            core_surf = pygame.Surface((core_r*2, core_r*2), pygame.SRCALPHA)
+                            pygame.draw.circle(core_surf, (255, 255, 255, int(200*progress)),
+                                               (core_r, core_r), core_r)
+                            internal_surf.blit(core_surf, (cx-core_r, cy-core_r))
+
+            if warp_flash_timer <= 0 and wh and wh.alive():
+                # Commit — consume wormhole and start transition
+                wh.state = "consumed"
+                wh.kill()
+                if lullaby_channel: lullaby_channel.stop()
+                lullaby_playing = False
+                warp_flash_wormhole = None
+                state        = "GALAXY_TRANSITION"
+                galaxy_timer = GALAXY_DURATION
+                player.invincible_timer = GALAXY_DURATION + 1.0
+
+        # ===================================================================
+        # GALAXY TRANSITION — warp effect before new galaxy
+        # ===================================================================
+        elif state == "GALAXY_TRANSITION":
+            galaxy_timer -= dt
+
+            # Draw warp effect — streaking stars rushing toward center
+            internal_surf.fill((0, 0, 0))
+            t = pygame.time.get_ticks() / 1000.0
+            progress = max(0.0, 1.0 - galaxy_timer / GALAXY_DURATION)
+
+            # Nebula shifts through galaxy colors during transition
+            galaxy_spice = int(progress * 120)   # drive nebula through full color range
+            nebula.draw(internal_surf, galaxy_spice)
+
+            for _ in range(120):
+                angle  = random.uniform(0, 360)
+                speed  = 200 + progress * 800
+                dist   = random.uniform(20, 400 * (1.0 + progress))
+                px     = 640 + math.cos(math.radians(angle)) * dist
+                py     = 360 + math.sin(math.radians(angle)) * dist
+                length = max(4, int(speed * dt * 8))
+                ex     = 640 + math.cos(math.radians(angle)) * (dist + length)
+                ey     = 360 + math.sin(math.radians(angle)) * (dist + length)
+                fade   = max(0, min(255, int(100 + 155 * progress)))
+                pygame.draw.line(internal_surf, (fade, fade, 255),
+                                 (int(px), int(py)), (int(ex), int(ey)), 1)
+            # Rainbow center flash
+            ph = t * 8
+            for i in range(3):
+                r_c = int(abs(math.sin(ph + i * 2)) * 255)
+                g_c = int(abs(math.sin(ph + i * 2 + 2)) * 255)
+                b_c = int(abs(math.sin(ph + i * 2 + 4)) * 255)
+                gs = pygame.Surface((200, 200), pygame.SRCALPHA)
+                pygame.draw.circle(gs, (r_c, g_c, b_c, 80), (100, 100), 80 + i * 20)
+                internal_surf.blit(gs, (540, 260))
+
+            # Draw ship centered, rotated 180°, scaled 4x, fading out toward end
+            fade_alpha   = int(255 * (galaxy_timer / GALAXY_DURATION))
+            source_img   = player.shield_image if player.has_shield else player.original_image
+            ship_size    = int(source_img.get_width() * 4)
+            ship_img     = pygame.transform.scale(
+                pygame.transform.rotate(source_img, 180),
+                (ship_size, ship_size))
+            ship_img.set_alpha(fade_alpha)
+            ship_rect    = ship_img.get_rect(center=(640, 360))
+
+            # Expanding rounded square — starts at ship icon size, grows to cover screen
+            start_size = ship_size
+            end_size   = _GALAXY_END_SIZE
+            sq_size    = int(start_size + (end_size - start_size) * progress)
+            sq_alpha   = int(255 * min(1.0, progress * 1.5))
+            border_r   = int(sq_size * 0.12)
+            sq_surf    = pygame.Surface((sq_size, sq_size), pygame.SRCALPHA)
+            sq_color   = (34, 85, 34, sq_alpha)   # dark green matching icon background
+            pygame.draw.rect(sq_surf, sq_color,
+                             (0, 0, sq_size, sq_size), border_radius=border_r)
+            sq_rect    = sq_surf.get_rect(center=(640, 360))
+            internal_surf.blit(sq_surf, sq_rect.topleft)
+
+            # Ship drawn on top of expanding square
+            internal_surf.blit(ship_img, ship_rect)
+            if galaxy_timer <= 0:
+                # Reset to new galaxy — keep hardness, reset spice/boss sauce/field
+                spice_score       = total_shots_fired   # zeroes out spice_level
+                butts_busted      = 0
+                # Clear ALL old objects — kill() removes from every group
+                for a in list(asteroids):       a.kill()
+                for s in list(shots):           s.kill()
+                for b in list(bosses):          b.kill()
+                for p in list(powerups):        p.kill()
+                for s in list(suppositories):   s.kill()
+                for w in list(wormholes):       w.kill()
+                for t in list(tapeworm_heads):  t.kill()
+                for m in list(mandingos):       m.kill()
+                for ms in list(mandingo_shots): ms.kill()
+                for v in list(vulvas):          v.kill()
+                if croak_channel:     croak_channel.stop()
+                if lullaby_channel:   lullaby_channel.stop()
+                if space_amb_channel: space_amb_channel.stop()
+                croak_playing   = False
+                lullaby_playing = False
+                sus_playing     = False
+                mandingo_engine_playing = False
+                vulva_engine_playing    = False
+                particles.clear()   # use proper clear method
+                # Fresh nebula for the new galaxy
+                nebula = Nebula(1280, 720)
+                first_shot_fired  = False
+                asteroid_field.butt_delay = 15.0
+                # Respawn opening poop field — 99 × hardness (more chaotic each galaxy)
+                player_spawn = pygame.Vector2(1280 / 2, 720 / 2)
+                poop_count   = int(99 * AsteroidField.speed_multiplier)
+                for _ in range(poop_count):
+                    while True:
+                        pos = pygame.Vector2(random.randint(60, 1220),
+                                             random.randint(60, 660))
+                        if pos.distance_to(player_spawn) >= 120:
+                            break
+                    poop = Asteroid(pos.x, pos.y, ASTEROID_MIN_RADIUS)
+                    poop.velocity  = pygame.Vector2(0, 0)
+                    poop.spin_rate = random.uniform(-120, 120)
+                player.position = pygame.Vector2(640, 360)
+                player.invincible_timer = 2.0
+                am_jam_paused  = False
+                am_jam_waiting = False
+                if audio_enabled and am_jam_sounds:
+                    _am = random.choice(am_jam_sounds)
+                    pygame.mixer.music.load(_am)
+                    pygame.mixer.music.set_volume(0.3)
+                    pygame.mixer.music.play()
+                if audio_enabled and space_amb_channel and space_amb_sound:
+                    space_amb_channel.play(space_amb_sound, loops=-1)
+                state = "GAME"
+
+        # ===================================================================
         # DYING STATE — freeze screen on death SFX, then show stats
         # ===================================================================
         elif state == "DYING":
+            if croak_channel: croak_channel.stop()
+            croak_playing = False
+            if lullaby_channel: lullaby_channel.stop()
+            lullaby_playing = False
+            if space_amb_channel: space_amb_channel.stop()
             death_freeze_timer -= dt
             if death_freeze_timer <= 0:
                 stats_timer = 0.0
@@ -1177,7 +1619,10 @@ def main():
         # STATS STATE — Player Shitistics screen
         # ===================================================================
         elif state == "STATS":
-            stats_timer += dt  # count up for prompt pulse animation only
+            stats_timer += dt
+            # Play credits tune once after 1 second delay
+            if audio_enabled and credits_tune and 1.0 <= stats_timer < 1.0 + dt:
+                credits_tune.play()
 
             internal_surf.fill((0, 0, 0))
             stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
@@ -1217,6 +1662,10 @@ def main():
                          for i, k in enumerate(keys_pressed))
             if new_key:
                 if audio_enabled:
+                    if credits_tune:
+                        credits_tune.stop()
+                    if space_amb_channel:
+                        space_amb_channel.stop()
                     pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
                     pygame.mixer.music.play(-1)
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
