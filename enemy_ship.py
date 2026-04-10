@@ -254,7 +254,6 @@ class MandingoShip(CircleShape):
 # ---------------------------------------------------------------------------
 # Vulva Ship
 # ---------------------------------------------------------------------------
-import math as _math
 VULVA_RADIUS      = PLAYER_RADIUS               # 20px — same as player
 VULVA_BASE_SPEED  = PLAYER_SPEED * 1.33         # ~266px/s base, scales with hardness
 VULVA_HYPERDRIVE  = 500.0                       # px/s during hyperdrive blast-off
@@ -301,9 +300,9 @@ class VulvaShip(CircleShape):
 
     # ── Trig cache ───────────────────────────────────────────────────────
     def _update_trig(self):
-        rad = _math.radians(-self.angle + 90)   # +90 aligns ellipse along ship facing
-        self._cos_a = _math.cos(rad)
-        self._sin_a = _math.sin(rad)
+        rad = math.radians(-self.angle + 90)   # +90 aligns ellipse along ship facing
+        self._cos_a = math.cos(rad)
+        self._sin_a = math.sin(rad)
 
     # ── Collision — rotated almond ellipse ───────────────────────────────
     def collides_with(self, other):
@@ -327,9 +326,9 @@ class VulvaShip(CircleShape):
         b = self.radius * VULVA_ELLIPSE_B
         points = []
         for i in range(36):
-            t  = _math.radians(i * 10)
-            ex = a * _math.cos(t)
-            ey = b * _math.sin(t)
+            t  = math.radians(i * 10)
+            ex = a * math.cos(t)
+            ey = b * math.sin(t)
             wx = self._cos_a * ex - self._sin_a * ey + self.position.x
             wy = self._sin_a * ex + self._cos_a * ey + self.position.y
             points.append((int(wx), int(wy)))
@@ -384,7 +383,7 @@ class VulvaShip(CircleShape):
         if self._state == "charging":
             # Pulsing aura — expands and fades outward
             t         = pygame.time.get_ticks() / 1000.0
-            pulse     = (_math.sin(t * 10) + 1) / 2          # 0..1 oscillating fast
+            pulse     = (math.sin(t * 10) + 1) / 2          # 0..1 oscillating fast
             aura_r    = int(self.radius * 1.1 + pulse * self.radius * 0.6)
             aura_alpha = int(50 + pulse * 90)
             aura_surf = pygame.Surface((aura_r * 2, aura_r * 2), pygame.SRCALPHA)
@@ -454,7 +453,7 @@ class VulvaShip(CircleShape):
                 perp = perp1 if perp1.dot(avoid_norm) >= perp2.dot(avoid_norm) else perp2
                 direction = (direction + perp * strength * 2.0).normalize()
 
-        self.angle = _math.degrees(_math.atan2(-direction.y, direction.x)) + 90
+        self.angle = math.degrees(math.atan2(-direction.y, direction.x)) + 90
         self.position += direction * speed * dt
 
     def update(self, dt, player_pos, hardness, asteroids, bosses):
@@ -596,26 +595,26 @@ class GoldenSuppository(CircleShape):
 
     def _update_angle(self):
         if self.velocity.length() > 0:
-            self.angle = _math.degrees(
-                _math.atan2(-self.velocity.y, self.velocity.x)) + 90
-        rad = _math.radians(-self.angle)
-        self._cos_a = _math.cos(rad)
-        self._sin_a = _math.sin(rad)
+            self.angle = math.degrees(
+                math.atan2(-self.velocity.y, self.velocity.x)) + 90
+        rad = math.radians(-self.angle)
+        self._cos_a = math.cos(rad)
+        self._sin_a = math.sin(rad)
 
     def draw(self, screen):
-        # White streak trail
+        # White streak trail — single surface fill + blit
         if len(self._streak) > 1:
             n = len(self._streak)
+            streak_surf = _get_streak_surf()
+            streak_surf.fill((0, 0, 0, 0))
             for i in range(n - 1):
                 frac  = i / n
                 alpha = int(180 * frac)
                 width = max(1, int(3 * frac))
                 p1 = (int(self._streak[i][0]),     int(self._streak[i][1]))
                 p2 = (int(self._streak[i + 1][0]), int(self._streak[i + 1][1]))
-                streak_surf = _get_streak_surf()
-                streak_surf.fill((0, 0, 0, 0))
                 pygame.draw.line(streak_surf, (255, 255, 255, alpha), p1, p2, width)
-                screen.blit(streak_surf, (0, 0))
+            screen.blit(streak_surf, (0, 0))
 
         rotated = pygame.transform.rotate(self.original_image, self.angle)
         rect    = rotated.get_rect(center=(int(self.position.x), int(self.position.y)))

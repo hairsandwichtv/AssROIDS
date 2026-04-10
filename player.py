@@ -174,70 +174,104 @@ class Player(CircleShape):
             new_shot.velocity = velocity
         return True
 
-    def update(self, dt, speed_multiplier=1.0):
-        # Cooldown timers
-        if self.timer > 0:
-            self.timer -= dt
-        if self.invincible_timer > 0:
-            self.invincible_timer -= dt
+    def update(self, dt, speed_multiplier=1.0,
+               ctrl_angle=None, ctrl_magnitude=0.0, ctrl_throttle=0.0,
+               ctrl_x_held=False, ctrl_dpad_fwd=False, ctrl_dpad_back=False,
+               ctrl_dpad_left=False, ctrl_dpad_right=False,
+               ctrl_l3=False, ctrl_boost=False, ctrl_shoot=False, ctrl_config=0):
 
-        # Tick milk beam duration
+        # --- Timers ---
+        if self.timer          > 0: self.timer          -= dt
+        if self.invincible_timer > 0: self.invincible_timer -= dt
+
         if self.milk_beam_active:
             self.milk_beam_timer -= dt
             if self.milk_beam_timer <= 0:
                 self.milk_beam_active = False
                 self.milk_beam_timer  = 0.0
 
-        # Tick DP duration
         if self.dp_active:
             self.dp_timer -= dt
             if self.dp_timer <= 0:
                 self.dp_active = False
                 self.dp_timer  = 0.0
 
-        # Beam firing state
+        # --- Input state ---
         keys = pygame.key.get_pressed()
-        self.is_firing_beam = self.milk_beam_active and keys[Player.shoot_key]
+        self.is_firing_beam = self.milk_beam_active and (keys[Player.shoot_key] or ctrl_shoot)
 
-        # --- Thruster logic ---
-        shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+        # Boost — keyboard Shift, LB, or L3 (L3 excluded on config 1)
+        boost_held = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+                      or ctrl_boost
+                      or (ctrl_l3 and ctrl_config != 1))
 
+        # --- Thruster ---
         if self.thruster_active:
-            # No drain while DP is active — free thruster use
             if not self.dp_active:
                 self.thruster_charge = max(0.0, self.thruster_charge - dt / THRUSTER_DURATION)
-            self.thruster_timer  += dt
-            # Stop if shift released or bar fully drained (drain only when not DP)
-            if not shift_held or self.thruster_charge <= 0.0:
+            self.thruster_timer += dt
+            if not boost_held or self.thruster_charge <= 0.0:
                 self.thruster_active = False
                 self.thruster_timer  = 0.0
                 if self.thruster_charge <= 0.0:
                     self.thruster_locked = True
         else:
-            # Recharge — faster as hardness increases
             if self.thruster_charge < 1.0:
-                recharge_rate = speed_multiplier / THRUSTER_RECHARGE
-                self.thruster_charge = min(1.0, self.thruster_charge + recharge_rate * dt)
-            # Unlock once fully recharged after hitting 0
+                self.thruster_charge = min(1.0, self.thruster_charge + dt * speed_multiplier / THRUSTER_RECHARGE)
             if self.thruster_charge >= 1.0:
                 self.thruster_locked = False
-            # Activate if shift pressed, has charge, and not locked out
-            if shift_held and self.thruster_charge > 0.0 and not self.thruster_locked:
+            if boost_held and self.thruster_charge > 0.0 and not self.thruster_locked:
                 self.thruster_active = True
                 self.thruster_timer  = 0.0
 
-        # Movement
         boosting = self.thruster_active
+
+        # --- Movement ---
         self.is_moving = False
-        if keys[pygame.K_a]: self.rotate(-dt)
-        if keys[pygame.K_d]: self.rotate(dt)
-        if keys[pygame.K_w]:
+
+        # Keyboard + D-pad rotation and thrust
+        if keys[pygame.K_a] or ctrl_dpad_left:  self.rotate(-dt)
+        if keys[pygame.K_d] or ctrl_dpad_right: self.rotate(dt)
+        if keys[pygame.K_w] or ctrl_dpad_fwd:
             self.move(dt, boost=boosting)
             self.is_moving = True
-        if keys[pygame.K_s]:
+        if keys[pygame.K_s] or ctrl_dpad_back:
             self.move(-dt, boost=boosting)
             self.is_moving = True
 
-        # Screen clamping
+        # Stick rotation (all configs)
+        if ctrl_angle is not None:
+            diff = (ctrl_angle - self.rotation + 180) % 360 - 180
+            self.rotation += min(abs(diff), 720.0 * dt) * (1 if diff >= 0 else -1)
+
+        # --- Controller config movement ---
+        reverse = ctrl_x_held or ctrl_throttle > 0.05
+
+        if ctrl_config == 0:
+            # Push Accelerate: outer ring = thrust, LT or X = reverse
+            if reverse:
+                self.move(-(ctrl_throttle if ctrl_throttle > 0.05 else 1.0) * dt, boost=boosting)
+                self.is_moving = True
+            elif (ctrl_magnitude > 0 or boosting) and not self.is_moving:
+                self.move(dt, boost=boosting)
+                self.is_moving = True
+
+        elif ctrl_config == 1:
+            # Click Accelerate: L3 = forward, LT or X = reverse, LB = boost
+            if reverse:
+                self.move(-(ctrl_throttle if ctrl_throttle > 0.05 else 1.0) * dt, boost=boosting)
+                self.is_moving = True
+            elif (ctrl_l3 or boosting) and not self.is_moving:
+                self.move(dt, boost=boosting)
+                self.is_moving = True
+
+        elif ctrl_config == 2:
+            # Trigger Accelerate: LT = forward, X = reverse, L3/LB = boost
+            if (ctrl_throttle > 0.05 or boosting) and not self.is_moving:
+                direction = -1 if ctrl_x_held else 1
+                self.move(direction * dt, boost=boosting)
+                self.is_moving = True
+
+        # --- Screen clamping ---
         self.position.x = max(self.radius, min(self.position.x, 1280 - self.radius))
         self.position.y = max(self.radius, min(self.position.y, 720  - self.radius))

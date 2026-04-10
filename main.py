@@ -6,6 +6,9 @@ import subprocess
 import math
 import random
 
+# Required for controller detection on Windows
+os.environ.setdefault("SDL_JOYSTICK_THREAD", "1")
+
 from starfield import Starfield
 from nebula import Nebula
 from particles import ParticleManager
@@ -59,9 +62,10 @@ def save_high_score(score):
 # Settings
 # ---------------------------------------------------------------------------
 DEFAULT_SETTINGS = {
-    "master_volume":  1.0,
-    "mute_menu_song": False,
-    "shoot_key":      pygame.K_SPACE,
+    "master_volume":    1.0,
+    "mute_menu_song":   False,
+    "shoot_key":        pygame.K_SPACE,
+    "controller_config": 0,   # 0=Push Accelerate, 1=Click Accelerate, 2=Trigger Accelerate
 }
 
 def load_settings():
@@ -168,48 +172,73 @@ def draw_milk_beam(surface, player):
 
 _SETTINGS_OVERLAY = None
 
-def draw_settings_menu(surface, settings, font, small_font, waiting_for_key):
+def draw_settings_menu(surface, settings, font, small_font, waiting_for_key, settings_row=0):
     global _SETTINGS_OVERLAY
     if _SETTINGS_OVERLAY is None:
         _SETTINGS_OVERLAY = pygame.Surface((1280, 720), pygame.SRCALPHA)
         _SETTINGS_OVERLAY.fill((0, 0, 0, 180))
     surface.blit(_SETTINGS_OVERLAY, (0, 0))
-    panel_rect = pygame.Rect(340, 140, 600, 420)
+    panel_rect = pygame.Rect(290, 110, 700, 500)
     pygame.draw.rect(surface, (30, 30, 40),    panel_rect, border_radius=12)
     pygame.draw.rect(surface, (255, 255, 255), panel_rect, 2, border_radius=12)
     title = font.render("SETTINGS", True, (255, 215, 0))
-    surface.blit(title, (640 - title.get_width() // 2, 160))
+    surface.blit(title, (640 - title.get_width() // 2, 130))
+    # Highlight selected row
+    row_ys = [210, 262, 312, 362]
+    if 0 <= settings_row < len(row_ys):
+        highlight = pygame.Surface((660, 46), pygame.SRCALPHA)
+        highlight.fill((255, 215, 0, 30))
+        surface.blit(highlight, (310, row_ys[settings_row]))
+        pygame.draw.rect(surface, (255, 215, 0),
+                         pygame.Rect(310, row_ys[settings_row], 660, 46), 1, border_radius=4)
     # Volume slider
     vol_label = small_font.render("MASTER VOLUME", True, "white")
-    surface.blit(vol_label, (380, 230))
-    slider_bg     = pygame.Rect(380, 260, 520, 16)
-    slider_fill   = pygame.Rect(380, 260, int(520 * settings["master_volume"]), 16)
-    slider_knob_x = 380 + int(520 * settings["master_volume"])
+    surface.blit(vol_label, (330, 195))
+    slider_bg     = pygame.Rect(330, 222, 580, 16)
+    slider_fill   = pygame.Rect(330, 222, int(580 * settings["master_volume"]), 16)
+    slider_knob_x = 330 + int(580 * settings["master_volume"])
     pygame.draw.rect(surface, (80, 80, 80),  slider_bg,   border_radius=8)
     pygame.draw.rect(surface, (0, 200, 100), slider_fill, border_radius=8)
-    pygame.draw.circle(surface, "white", (slider_knob_x, 268), 10)
+    pygame.draw.circle(surface, "white", (slider_knob_x, 230), 10)
     pct_txt = small_font.render(f"{int(settings['master_volume'] * 100)}%", True, "white")
-    surface.blit(pct_txt, (910, 255))
+    surface.blit(pct_txt, (925, 217))
     # Mute checkbox
     mute_label = small_font.render("MUTE MENU SONG", True, "white")
-    surface.blit(mute_label, (380, 320))
-    box_rect = pygame.Rect(820, 318, 22, 22)
+    surface.blit(mute_label, (330, 272))
+    box_rect = pygame.Rect(820, 270, 22, 22)
     pygame.draw.rect(surface, "white", box_rect, border_radius=3)
     if settings["mute_menu_song"]:
         pygame.draw.rect(surface, (0, 200, 100), box_rect.inflate(-6, -6), border_radius=2)
     # Keybind
     bind_label = small_font.render("SHOOT KEY", True, "white")
-    surface.blit(bind_label, (380, 390))
+    surface.blit(bind_label, (330, 322))
     key_name   = pygame.key.name(settings["shoot_key"]).upper()
     bind_text  = "[ PRESS ANY KEY ]" if waiting_for_key else f"[ {key_name} ]"
     bind_color = (255, 215, 0) if waiting_for_key else (100, 200, 255)
     bind_surf  = small_font.render(bind_text, True, bind_color)
-    bind_rect  = bind_surf.get_rect(topleft=(680, 390))
+    bind_rect  = bind_surf.get_rect(topleft=(630, 322))
     surface.blit(bind_surf, bind_rect.topleft)
-    # ESC hint
-    esc_txt = small_font.render("ESC  —  Close Settings", True, (150, 150, 150))
-    surface.blit(esc_txt, (640 - esc_txt.get_width() // 2, 510))
-    return slider_bg, box_rect, bind_rect
+    # Controller config selector
+    cfg_label = small_font.render("CONTROLLER CONFIG", True, "white")
+    surface.blit(cfg_label, (330, 372))
+    cfg_names = [
+        "Single Stick - Push Accelerate",
+        "Single Stick - Click Accelerate",
+        "Single Stick - Trigger Accelerate",
+    ]
+    current_cfg = settings.get("controller_config", 0)  # draw func reads settings directly — fine, called rarely
+    left_arrow_rect  = pygame.Rect(330, 397, 30, 30)
+    right_arrow_rect = pygame.Rect(920, 397, 30, 30)
+    pygame.draw.polygon(surface, (200, 200, 200),
+                        [(355, 397), (330, 412), (355, 427)])
+    pygame.draw.polygon(surface, (200, 200, 200),
+                        [(920, 397), (950, 412), (920, 427)])
+    cfg_surf = small_font.render(cfg_names[current_cfg], True, (100, 200, 255))
+    surface.blit(cfg_surf, cfg_surf.get_rect(center=(640, 412)))
+    # ESC / B hint
+    esc_txt = small_font.render("ESC / B Button  —  Close Settings", True, (150, 150, 150))
+    surface.blit(esc_txt, (640 - esc_txt.get_width() // 2, 555))
+    return slider_bg, box_rect, bind_rect, left_arrow_rect, right_arrow_rect
 
 _THRUSTERS_LABEL = None  # cached once after fonts are created
 
@@ -294,6 +323,7 @@ def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
 def main():
     pygame.mixer.pre_init(44100, -16, 2, 512)
     pygame.init()
+    pygame.joystick.init()
     pygame.display.set_caption("AssROIDS")
 
     try:
@@ -313,6 +343,32 @@ def main():
     stats_line_font  = pygame.font.SysFont("Arial", 22)
     clock         = pygame.time.Clock()
     dt            = 0
+
+    # Controller state
+    _joystick        = None   # active controller, or None
+    CTRL_DEADZONE    = 0.05   # ignore stick drift below this threshold
+    CTRL_AXIS_LX     = 0      # left stick X
+    CTRL_AXIS_LY     = 1      # left stick Y
+    CTRL_AXIS_RTRIG  = 5      # right trigger (shoot)
+    CTRL_AXIS_LTRIG  = 4      # left trigger
+    CTRL_OUTER_ZONE  = 0.90   # past this = rotate + thrust, below = rotate only
+    CTRL_BTN_A       = 0      # A button (shoot)
+    CTRL_BTN_B       = 1      # B button (close menus)
+    CTRL_BTN_X       = 2      # X button (reverse modifier)
+    CTRL_BTN_LB      = 4      # left bumper (boost)
+    CTRL_BTN_L3      = 8      # left stick click (forward thrust)
+    CTRL_BTN_START   = 7      # start button
+
+    def _apply_deadzone(val, dz):
+        """Return 0 if |val| < deadzone, else rescale to 0-1 range."""
+        if abs(val) < dz:
+            return 0.0
+        return (val - dz * (1 if val > 0 else -1)) / (1.0 - dz)
+
+    # Connect any already-plugged-in controller
+    if pygame.joystick.get_count() > 0:
+        _joystick = pygame.joystick.Joystick(0)
+        _joystick.init()
 
     menu_bg_original = pygame.image.load(asset_path("AssROIDS Menu BG.png")).convert()
     menu_bg          = pygame.transform.scale(menu_bg_original, internal_res)
@@ -434,6 +490,8 @@ def main():
     exit_btn     = Button(int(1280 * 0.90), 570, asset_path("Exit Button.png"),      0.5)
     readme_btn   = Button(133,              150, asset_path("READ ME Button.png"),   0.4)
     settings_btn = Button(int(1280 * 0.90), 150, asset_path("Settings Button.png"),  0.5)
+    # Menu button order for controller navigation: 0=start, 1=exit, 2=readme, 3=settings
+    menu_btn_list = [start_btn, exit_btn, readme_btn, settings_btn]
     stars        = Starfield(1280, 720, 200)
     nebula       = Nebula(1280, 720)
     particles    = ParticleManager()
@@ -442,6 +500,10 @@ def main():
     apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
     settings_open   = False
     waiting_for_key = False
+    paused              = False
+    pause_selection     = 0   # 0=Resume, 1=Main Menu
+    _suppress_ctrl_shoot = False  # True = wait for A to be released before shooting
+    settings_row        = 0   # 0=Volume, 1=Mute, 2=ShootKey, 3=CtrlConfig
 
     state             = "MENU"
     score             = 0
@@ -490,6 +552,27 @@ def main():
     vulva_engine_ch      = None
     vulva_engine_playing = False
 
+    # Controller input state — reset each frame
+    ctrl_angle     = None
+    ctrl_magnitude = 0.0
+    ctrl_throttle  = 0.0
+    ctrl_x_held    = False
+    ctrl_dpad_fwd  = False
+    ctrl_dpad_back = False
+    ctrl_dpad_left = False
+    ctrl_dpad_right= False
+    ctrl_boost     = False
+    ctrl_l3        = False
+    ctrl_shoot     = False
+    ctrl_any_btn  = False   # any button pressed this frame
+    ctrl_prev_btn = False   # button state last frame (for edge detection)
+
+    # Menu navigation — 0=start, 1=exit, 2=readme, 3=settings
+    # -1 means mouse is in control
+    menu_selection     = -1
+    _ctrl_nav_cooldown = 0.0  # prevents too-fast navigation
+    ctrl_config = settings.get("controller_config", 0)  # cached — only updated on change
+
     # Anti-turtle timer — spawns enemy ship if no boss in 2 minutes (reduced by hardness)
     ANTI_TURTLE_BASE   = 75.0  # seconds before anti-turtle ship spawns
     anti_turtle_timer  = ANTI_TURTLE_BASE
@@ -511,6 +594,23 @@ def main():
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
 
+            # Controller hot-plug support
+            if event.type == pygame.JOYDEVICEADDED:
+                _joystick = pygame.joystick.Joystick(event.device_index)
+                _joystick.init()
+            if event.type == pygame.JOYDEVICEREMOVED:
+                _joystick = None
+
+            # Pause toggle — ESC or Start button during game
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                if state == "GAME" or state == "PAUSED":
+                    paused = not paused
+                    state  = "PAUSED" if paused else "GAME"
+            if event.type == pygame.JOYBUTTONDOWN and event.button == CTRL_BTN_START:
+                if state == "GAME" or state == "PAUSED":
+                    paused = not paused
+                    state  = "PAUSED" if paused else "GAME"
+
             if settings_open and waiting_for_key and event.type == pygame.KEYDOWN:
                 if event.key != pygame.K_ESCAPE:
                     settings["shoot_key"] = event.key
@@ -519,6 +619,11 @@ def main():
                 waiting_for_key = False
 
             if settings_open and event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                settings_open = False
+                save_settings(settings)
+
+            # B button closes settings
+            if settings_open and event.type == pygame.JOYBUTTONDOWN and event.button == CTRL_BTN_B:
                 settings_open = False
                 save_settings(settings)
 
@@ -531,12 +636,22 @@ def main():
                     sc = win_w / 1280; ox = 0; oy = (win_h - 720 * sc) / 2
                 mx = (pygame.mouse.get_pos()[0] - ox) / sc
                 my = (pygame.mouse.get_pos()[1] - oy) / sc
-                slider_area = pygame.Rect(380, 250, 520, 36)
-                mute_box    = pygame.Rect(820, 318, 22, 22)
-                bind_area   = pygame.Rect(680, 383, 250, 34)
+                slider_area      = pygame.Rect(330, 210, 580, 36)
+                mute_box         = pygame.Rect(820, 270, 22, 22)
+                bind_area        = pygame.Rect(630, 315, 280, 34)
+                cfg_left_area    = pygame.Rect(330, 397, 30, 30)
+                cfg_right_area   = pygame.Rect(920, 397, 30, 30)
                 if slider_area.collidepoint(mx, my):
-                    settings["master_volume"] = max(0.0, min(1.0, (mx - 380) / 520))
+                    settings["master_volume"] = max(0.0, min(1.0, (mx - 330) / 580))
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
+                    save_settings(settings)
+                elif cfg_left_area.collidepoint(mx, my):
+                    ctrl_config = (ctrl_config - 1) % 3
+                    settings["controller_config"] = ctrl_config
+                    save_settings(settings)
+                elif cfg_right_area.collidepoint(mx, my):
+                    ctrl_config = (ctrl_config + 1) % 3
+                    settings["controller_config"] = ctrl_config
                     save_settings(settings)
                 elif mute_box.collidepoint(mx, my):
                     settings["mute_menu_song"] = not settings["mute_menu_song"]
@@ -546,6 +661,58 @@ def main():
                     waiting_for_key = True
 
         internal_surf.fill("black")
+
+        # Read controller state once per frame — available to all states
+        ctrl_angle     = None
+        ctrl_magnitude = 0.0
+        ctrl_throttle  = 0.0
+        ctrl_x_held    = False
+        ctrl_dpad_fwd  = False
+        ctrl_dpad_back = False
+        ctrl_dpad_left = False
+        ctrl_dpad_right= False
+        ctrl_boost = ctrl_l3 = ctrl_shoot = False
+        ctrl_prev_btn = ctrl_any_btn
+        ctrl_any_btn  = False
+        ctrl_nav_x    = 0
+        ctrl_nav_y    = 0
+        if _joystick:
+            try:
+                raw_lx = _joystick.get_axis(CTRL_AXIS_LX)
+                raw_ly = _joystick.get_axis(CTRL_AXIS_LY)
+                raw_rt = _joystick.get_axis(CTRL_AXIS_RTRIG)
+                ctrl_x_held = _joystick.get_button(CTRL_BTN_X) == 1
+                magnitude = (raw_lx**2 + raw_ly**2) ** 0.5
+                if magnitude > CTRL_DEADZONE:
+                    ctrl_angle = math.degrees(math.atan2(-raw_lx, raw_ly))
+                    # Config 0: Push Accelerate — outer zone = thrust
+                    if ctrl_config == 0 and magnitude > CTRL_OUTER_ZONE:
+                        ctrl_magnitude = min(1.0, (magnitude - CTRL_OUTER_ZONE) / (1.0 - CTRL_OUTER_ZONE))
+                raw_lt         = _joystick.get_axis(CTRL_AXIS_LTRIG)
+                ctrl_throttle  = (raw_lt + 1.0) / 2.0   # 0.0 = not pressed, 1.0 = full
+                ctrl_boost   = _joystick.get_button(CTRL_BTN_LB) == 1
+                ctrl_l3      = _joystick.get_button(CTRL_BTN_L3) == 1
+                ctrl_shoot   = raw_rt > 0.0 or _joystick.get_button(CTRL_BTN_A) == 1
+                ctrl_any_btn = any(_joystick.get_button(i)
+                                   for i in range(_joystick.get_numbuttons()))
+                # D-pad navigation
+                if _joystick.get_numhats() > 0:
+                    hat = _joystick.get_hat(0)
+                    ctrl_nav_x = hat[0]   # -1=left, 1=right
+                    ctrl_nav_y = hat[1]   # hat Y
+                    # D-pad movement (works on all configs like W/A/S/D)
+                    ctrl_dpad_fwd   = hat[1] == 1
+                    ctrl_dpad_back  = hat[1] == -1
+                    ctrl_dpad_left  = hat[0] == -1
+                    ctrl_dpad_right = hat[0] == 1
+                # Left stick also navigates if no D-pad input
+                if ctrl_nav_x == 0 and ctrl_nav_y == 0:
+                    if raw_lx < -0.5: ctrl_nav_x = -1
+                    elif raw_lx >  0.5: ctrl_nav_x = 1
+                    if raw_ly < -0.5: ctrl_nav_y = 1
+                    elif raw_ly >  0.5: ctrl_nav_y = -1
+            except pygame.error:
+                _joystick = None   # controller disconnected unexpectedly
 
         # ===================================================================
         # MENU STATE
@@ -558,7 +725,42 @@ def main():
             internal_surf.blit(_hs_label, (640 - _hs_label.get_width() // 2, 100))
             internal_surf.blit(_hs_value, (640 - _hs_value.get_width() // 2, 130))
 
-            if start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
+            # Controller menu navigation — blocked when settings open
+            if pygame.mouse.get_rel() != (0, 0):
+                menu_selection = -1
+            _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
+            if not settings_open and _joystick and _ctrl_nav_cooldown <= 0 and (ctrl_nav_x != 0 or ctrl_nav_y != 0):
+                if menu_selection == -1:
+                    menu_selection = 0   # enter controller mode on first input
+                else:
+                    # Layout: 0=start(BL), 1=exit(BR), 2=readme(TL), 3=settings(TR)
+                    # Left/Right switches between left and right columns
+                    # Up/Down switches between top and bottom rows
+                    if ctrl_nav_x == 1:    # right
+                        if menu_selection in (0, 2): menu_selection += 1
+                    elif ctrl_nav_x == -1:  # left
+                        if menu_selection in (1, 3): menu_selection -= 1
+                    if ctrl_nav_y == -1:   # down
+                        if menu_selection in (2, 3): menu_selection -= 2
+                    elif ctrl_nav_y == 1:   # up
+                        if menu_selection in (0, 1): menu_selection += 2
+                _ctrl_nav_cooldown = 0.25   # 250ms between nav steps
+                if audio_enabled and tick_sound:
+                    tick_sound.play()
+
+            # Highlight selected button
+            if menu_selection >= 0:
+                sel_btn = menu_btn_list[menu_selection]
+                pygame.draw.rect(internal_surf, (255, 215, 0),
+                                 sel_btn.rect.inflate(8, 8), 3, border_radius=6)
+
+            # A button or Start button selects
+            ctrl_confirm = (ctrl_any_btn and not ctrl_prev_btn
+                            and menu_selection >= 0
+                            and _joystick
+                            and _joystick.get_button(CTRL_BTN_A) == 1)
+
+            if start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 0):
                 if audio_enabled:
                     blast_off_sound.play()
                     pygame.mixer.music.stop()
@@ -618,6 +820,7 @@ def main():
                 asteroid_field.butt_delay = 15.0  # suppressed until first shot or 15s elapses
                 state         = "GAME"
                 first_shot_fired = False
+                _suppress_ctrl_shoot = True  # wait for A release before allowing shoot
                 am_jam_paused  = False
                 am_jam_waiting = False
                 if audio_enabled and am_jam_sounds:
@@ -640,19 +843,52 @@ def main():
                         space_amb_channel.play(space_amb_sound, loops=-1)
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=True)
 
-            if readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
+            if readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 2):
                 open_readme()
 
-            if settings_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
+            if settings_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 3):
                 settings_open = not settings_open
                 waiting_for_key = False
 
-            if exit_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res):
+            if exit_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 1):
                 pygame.quit()
                 sys.exit()
 
             if settings_open:
-                draw_settings_menu(internal_surf, settings, font, small_font, waiting_for_key)
+                draw_settings_menu(internal_surf, settings, font, small_font, waiting_for_key, settings_row)
+                # Controller navigation inside settings
+                if _joystick and not waiting_for_key:
+                    _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
+                    if _ctrl_nav_cooldown <= 0 and ctrl_nav_y != 0:
+                        # Up/Down navigates rows
+                        settings_row = (settings_row + (-1 if ctrl_nav_y == 1 else 1)) % 4
+                        _ctrl_nav_cooldown = 0.20
+                        if audio_enabled and tick_sound: tick_sound.play()
+                    if _ctrl_nav_cooldown <= 0 and ctrl_nav_x != 0:
+                        # Left/Right adjusts the selected row
+                        if settings_row == 0:   # Volume
+                            settings["master_volume"] = max(0.0, min(1.0,
+                                settings["master_volume"] + (0.05 if ctrl_nav_x == 1 else -0.05)))
+                            apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
+                            save_settings(settings)
+                        elif settings_row == 1:  # Mute — left/right both toggle
+                            settings["mute_menu_song"] = not settings["mute_menu_song"]
+                            apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
+                            save_settings(settings)
+                        elif settings_row == 3:  # Controller config
+                            ctrl_config = (ctrl_config + (1 if ctrl_nav_x == 1 else -1)) % 3
+                            settings["controller_config"] = ctrl_config
+                            save_settings(settings)
+                        _ctrl_nav_cooldown = 0.20
+                        if audio_enabled and tick_sound: tick_sound.play()
+                    # A button confirms/toggles selected row
+                    if ctrl_any_btn and not ctrl_prev_btn and _joystick.get_button(CTRL_BTN_A) == 1:
+                        if settings_row == 1:   # Mute — A toggles
+                            settings["mute_menu_song"] = not settings["mute_menu_song"]
+                            apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
+                            save_settings(settings)
+                        elif settings_row == 2:  # Shoot key — A starts rebind
+                            waiting_for_key = True
 
         # ===================================================================
         # GAME STATE
@@ -660,7 +896,13 @@ def main():
         elif state == "GAME":
 
             keys = pygame.key.get_pressed()
-            if keys[Player.shoot_key]:
+            # Suppress shoot for a few frames after entering game
+            # Wait for A button release before allowing controller shoot
+            if _suppress_ctrl_shoot:
+                if not (_joystick and _joystick.get_button(CTRL_BTN_A) == 1):
+                    _suppress_ctrl_shoot = False
+                ctrl_shoot = False
+            if keys[Player.shoot_key] or ctrl_shoot:
                 if not player.milk_beam_active:
                     if player.shoot():
                         total_shots_fired += 1
@@ -670,7 +912,13 @@ def main():
                             first_shot_fired = True
                             asteroid_field.butt_delay = 3.0
 
-            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
+            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier,
+                          ctrl_angle=ctrl_angle, ctrl_magnitude=ctrl_magnitude,
+                          ctrl_throttle=ctrl_throttle, ctrl_x_held=ctrl_x_held,
+                          ctrl_dpad_fwd=ctrl_dpad_fwd, ctrl_dpad_back=ctrl_dpad_back,
+                          ctrl_dpad_left=ctrl_dpad_left, ctrl_dpad_right=ctrl_dpad_right,
+                          ctrl_l3=ctrl_l3, ctrl_boost=ctrl_boost, ctrl_shoot=ctrl_shoot,
+                          ctrl_config=ctrl_config)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
             # Update standard objects (shots, asteroids, powerups, field)
             for obj in standard_updatable:
@@ -898,7 +1146,11 @@ def main():
                     dy = player.position.y - boss.position.y
                     base_angle = math.degrees(math.atan2(-dy, dx)) + 180
                     boss.angle = base_angle + (90 if boss.skin == "coinpurse" else 0)
-                if boss.collides_with(player) and not player.is_invincible():
+                # Skip coin purse collision during charge grace period
+                _grace = (boss.skin == "coinpurse" and
+                          boss.special_state == "active" and
+                          getattr(boss, "_charge_grace", 0) > 0)
+                if not _grace and boss.collides_with(player) and not player.is_invincible():
                     if player.has_shield:
                         player.consume_shield()
                         if audio_enabled: rubber_pop_sound.play()
@@ -1407,13 +1659,86 @@ def main():
         # ===================================================================
         # WARP FLASH — 1 second vortex before galaxy transition
         # ===================================================================
+        elif state == "PAUSED":
+            # Draw the frozen game scene behind the overlay
+            stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
+            nebula.draw(internal_surf, spice_level)
+            for obj in drawable:
+                obj.draw(internal_surf)
+
+            # Dark overlay
+            overlay = pygame.Surface((1280, 720), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 160))
+            internal_surf.blit(overlay, (0, 0))
+
+            # Panel
+            panel = pygame.Rect(440, 230, 400, 260)
+            pygame.draw.rect(internal_surf, (30, 30, 40), panel, border_radius=12)
+            pygame.draw.rect(internal_surf, (255, 255, 255), panel, 2, border_radius=12)
+
+            pause_title = font.render("PAUSED", True, (255, 215, 0))
+            internal_surf.blit(pause_title, (640 - pause_title.get_width() // 2, 255))
+
+            options = ["RESUME", "MAIN MENU"]
+            for i, label in enumerate(options):
+                color = (255, 215, 0) if pause_selection == i else (200, 200, 200)
+                surf = font.render(label, True, color)
+                y = 320 + i * 60
+                internal_surf.blit(surf, (640 - surf.get_width() // 2, y))
+                if pause_selection == i:
+                    pygame.draw.rect(internal_surf, (255, 215, 0),
+                                     pygame.Rect(440 + 20, y - 6,
+                                                 360, surf.get_height() + 12),
+                                     2, border_radius=6)
+
+            # Keyboard/dpad nav in pause menu
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_w or event.key == pygame.K_UP:
+                    pause_selection = (pause_selection - 1) % 2
+                    if audio_enabled and tick_sound: tick_sound.play()
+                elif event.key == pygame.K_s or event.key == pygame.K_DOWN:
+                    pause_selection = (pause_selection + 1) % 2
+                    if audio_enabled and tick_sound: tick_sound.play()
+
+            # Controller nav in pause menu
+            _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
+            if _joystick and _ctrl_nav_cooldown <= 0 and ctrl_nav_y != 0:
+                pause_selection = (pause_selection + (-1 if ctrl_nav_y == 1 else 1)) % 2
+                _ctrl_nav_cooldown = 0.2
+                if audio_enabled and tick_sound: tick_sound.play()
+
+            # Confirm via keyboard Enter or controller A button
+            pause_confirm = False
+            if pygame.key.get_pressed()[pygame.K_RETURN]:
+                pause_confirm = True
+            if _joystick and ctrl_any_btn and not ctrl_prev_btn and _joystick.get_button(CTRL_BTN_A):
+                pause_confirm = True
+
+            if pause_confirm:
+                if pause_selection == 0:  # Resume
+                    paused = False
+                    state  = "GAME"
+                    _suppress_ctrl_shoot = True
+                elif pause_selection == 1:  # Main Menu
+                    paused = False
+                    state  = "MENU"
+                    if audio_enabled:
+                        if croak_channel: croak_channel.stop()
+                        if lullaby_channel: lullaby_channel.stop()
+                        if space_amb_channel: space_amb_channel.stop()
+                        croak_playing = lullaby_playing = False
+                        pygame.mixer.music.stop()
+                        pygame.mixer.music.load(asset_path("Ass Roids Menu Song.mp3"))
+                        pygame.mixer.music.play(-1)
+                        apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
+
         elif state == "WARP_FLASH":
             warp_flash_timer -= dt
             progress = 1.0 - max(0.0, warp_flash_timer / WARP_FLASH_DURATION)
             wh = warp_flash_wormhole
 
             # Player can still move during flash
-            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier)
+            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier, ctrl_angle=ctrl_angle, ctrl_magnitude=ctrl_magnitude, ctrl_throttle=ctrl_throttle, ctrl_x_held=ctrl_x_held, ctrl_dpad_fwd=ctrl_dpad_fwd, ctrl_dpad_back=ctrl_dpad_back, ctrl_dpad_left=ctrl_dpad_left, ctrl_dpad_right=ctrl_dpad_right, ctrl_l3=ctrl_l3, ctrl_boost=ctrl_boost, ctrl_shoot=ctrl_shoot, ctrl_config=ctrl_config)
 
             # Cancel if player leaves wormhole
             if wh and wh.alive():
@@ -1651,16 +1976,17 @@ def main():
 
             # Prompt
             prompt_alpha = int(abs(math.sin(stats_timer * 3)) * 200 + 55)
-            prompt_surf  = small_font.render("[ Press any key to continue ]", True, (150, 150, 150))
+            prompt_surf  = small_font.render("[ Press any key or button to continue ]", True, (150, 150, 150))
             prompt_surf.set_alpha(prompt_alpha)
             internal_surf.blit(prompt_surf, (640 - prompt_surf.get_width() // 2, 460))
 
-            # Any key → menu (no time limit)
+            # Any key OR any controller button → menu
             keys_pressed = pygame.key.get_pressed()
-            # Close only when a key pressed NOW was NOT held when stats screen opened
             new_key = any(k and i not in _stats_keys_on_open
                          for i, k in enumerate(keys_pressed))
-            if new_key:
+            # Controller: any button pressed this frame (edge detect)
+            ctrl_close = ctrl_any_btn and not ctrl_prev_btn and stats_timer > 1.0
+            if new_key or ctrl_close:
                 if audio_enabled:
                     if credits_tune:
                         credits_tune.stop()
@@ -1690,7 +2016,7 @@ def main():
         shake_y = random.randint(-SHAKE_INTENSITY, SHAKE_INTENSITY) if shake_timer > 0 else 0
         screen.blit(scaled_view, (offset_x + shake_x, offset_y + shake_y))
         pygame.display.flip()
-        dt = clock.tick(60) / 1000
+        dt = min(clock.tick(60) / 1000, 0.05)  # cap at 50ms — prevents physics tunnelling on slow frames
 
 
 if __name__ == "__main__":

@@ -456,9 +456,6 @@ class TapewormHead(pygame.sprite.Sprite):
                                          unsetcolor=(0,0,0,0)), rect.topleft)
 
     # ── Hitbox ───────────────────────────────────────────────────────────
-    def _tail_dir(self):
-        rad = math.radians(self.angle - 90)
-        return pygame.Vector2(-math.cos(rad), math.sin(rad))
 
     def head_triangle(self):
         tail_dir = self._tail_dir()

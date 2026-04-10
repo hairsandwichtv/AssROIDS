@@ -368,9 +368,12 @@ class Boss(CircleShape):
                 self.special_dir = pygame.Vector2(math.cos(rad), -math.sin(rad)).normalize()
                 self.special_state  = "active"
                 self.special_charge = 2.0  # beam duration
+                self._laser_startup = 0.15  # brief delay before beam can hit
 
         elif self.special_state == "active":
             self.special_charge -= dt
+            if hasattr(self, "_laser_startup") and self._laser_startup > 0:
+                self._laser_startup -= dt
             if self.special_charge <= 0:
                 self.special_state  = "cooldown"
                 self.special_charge = 1.0
@@ -436,13 +439,16 @@ class Boss(CircleShape):
                     self.special_dir = to_player.normalize()
                 else:
                     self.special_dir = pygame.Vector2(0, 1)
-                charge_speed = self._stored_velocity.length() * 3.5
+                charge_speed = min(self._stored_velocity.length() * 3.5, 500)
                 self.velocity = self.special_dir * max(charge_speed, 350)
                 self.special_state  = "active"
                 self.special_charge = 1.2  # max charge duration
+                self._charge_grace  = 0.12 # 120ms before collision registers
 
         elif self.special_state == "active":
             # Charge — let velocity carry it; end if boundary hit or time up
+            if hasattr(self, "_charge_grace") and self._charge_grace > 0:
+                self._charge_grace -= dt
             self.special_charge -= dt
             hit_wall = (
                 self.position.x <= self.visual_radius or
@@ -467,6 +473,8 @@ class Boss(CircleShape):
         """Dick Butt only — returns True if the active laser beam hits the target circle."""
         if self.skin != "dickbutt" or self.special_state != "active":
             return False
+        if getattr(self, "_laser_startup", 0) > 0:
+            return False  # beam still spinning up
         rad    = math.radians(self.angle - 180)
         origin = pygame.Vector2(
             self.position.x + math.cos(rad) * self.visual_radius * 0.55,

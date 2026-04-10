@@ -1,5 +1,6 @@
 {
-  "master_volume": 0.39615384615384613,
+  "master_volume": 0.4461538461538461,
   "mute_menu_song": false,
-  "shoot_key": 32
+  "shoot_key": 32,
+  "controller_config": 2
 }
