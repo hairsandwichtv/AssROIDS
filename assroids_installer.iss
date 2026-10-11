@@ -3,7 +3,7 @@
 
 [Setup]
 AppName=AssROIDS
-AppVersion=1.0
+AppVersion=1.6
 AppPublisher=HSTV
 DefaultDirName={autopf}\AssROIDS
 DefaultGroupName=AssROIDS
