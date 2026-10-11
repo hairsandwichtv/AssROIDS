@@ -32,6 +32,7 @@ from circleshape import DEBUG_HITBOXES
 POWERUP_SPAWN_BASE   = 20.0
 BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
+DEBUG_TAPEWORM_AT_START = False  # TESTING: spawn a wormhole + tapeworm when a new game starts
 _GALAXY_END_SIZE     = int(math.hypot(1280, 720) * 2)  # pre-computed diagonal
 
 class _FakeCircle:
@@ -838,6 +839,8 @@ def main():
                     poop = Asteroid(pos.x, pos.y, ASTEROID_MIN_RADIUS)
                     poop.velocity  = pygame.Vector2(0, 0)
                     poop.spin_rate = random.uniform(-120, 120)  # random rotation
+                if DEBUG_TAPEWORM_AT_START:
+                    WormHole(320, 360)   # left of the player, outside lunge range
                 if audio_enabled:
                     if space_amb_channel and space_amb_sound:
                         space_amb_channel.play(space_amb_sound, loops=-1)
@@ -1578,7 +1581,8 @@ def main():
                             shot.kill()
                             total_shots_fired -= 1
                             particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
-                            new_head = tw.damage_segment(i, spice_level)
+                            for pos in tw.damage_segment(i, spice_level, len(tapeworm_heads))[::6]:
+                                particles.spawn_explosion(pos.x, pos.y, is_butt=False, count=4)
                             hit = True
                             break
                     if hit:
@@ -1594,8 +1598,10 @@ def main():
                             continue
                         fc = _FakeCircle(seg.position, SEG_RADIUS)
                         if beam_hits_circle(player, fc):
-                            particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
-                            new_head = tw.damage_segment(i, spice_level)
+                            if tw.beam_tick_ready():
+                                particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
+                                for pos in tw.damage_segment(i, spice_level, len(tapeworm_heads))[::6]:
+                                    particles.spawn_explosion(pos.x, pos.y, is_butt=False, count=4)
                             break
 
             spice_level = max(0, total_shots_fired - spice_score)

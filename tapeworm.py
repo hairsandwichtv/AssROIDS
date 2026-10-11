@@ -23,10 +23,17 @@ RETRACT_SPEED = 200.0
 FREE_SPEED    = 180.0
 FLASH_DUR     = 0.12
 
+# Split control
+SPLIT_COOLDOWN   = 1.5   # seconds after spawning/splitting before a head can split again
+BEAM_SEG_TICK    = 0.25  # milk beam damages segments at most once per this many seconds
+MIN_SPLIT_SEGS   = 2     # both halves need this many segments to split; shorter end crumbles
+MAX_LIVE_HEADS   = 12    # at this many heads, the would-be new piece crumbles instead
+CLONE_HEAD_SCALE = 0.9   # heads spawned by a split are 10% smaller (one reduction only)
+
 # ---------------------------------------------------------------------------
 # Lazy image loading
 # ---------------------------------------------------------------------------
-_wh_img = _head_img = _seg_img = None
+_wh_img = _head_img = _clone_head_img = _seg_img = None
 _seg_rot_cache = {}
 
 # Sounds — loaded lazily after pygame.mixer init
@@ -61,7 +68,7 @@ def _load_sounds():
     _snd_rainbow = _load("Rainbow Hole.mp3")   # angle (quantized to 1°) → rotated surface
 
 def _load_images():
-    global _wh_img, _head_img, _seg_img
+    global _wh_img, _head_img, _clone_head_img, _seg_img
     if _wh_img is not None:
         return
     _wh_img   = pygame.transform.scale(
@@ -70,6 +77,8 @@ def _load_images():
     _head_img = pygame.transform.scale(
         pygame.image.load(asset_path("Tapeworm Head.png")).convert_alpha(),
         (HEAD_SIZE, HEAD_SIZE))
+    clone_size = int(HEAD_SIZE * CLONE_HEAD_SCALE)
+    _clone_head_img = pygame.transform.smoothscale(_head_img, (clone_size, clone_size))
     _seg_img  = pygame.transform.scale(
         pygame.image.load(asset_path("Tapeworm Prog128.png")).convert_alpha(),
         (SEG_SIZE, SEG_SIZE))
@@ -174,13 +183,18 @@ class WormHole(pygame.sprite.Sprite):
 # ---------------------------------------------------------------------------
 class TapewormHead(pygame.sprite.Sprite):
 
-    def __init__(self, wormhole, segments, spice_level, anchored=True, start_pos=None):
+    def __init__(self, wormhole, segments, spice_level, anchored=True, start_pos=None, is_clone=False):
         pygame.sprite.Sprite.__init__(self, self.containers)
         _load_images()
         self.wormhole    = wormhole
         self.segments    = list(segments)
         self.health      = 9 + spice_level // 2
-        self.radius      = HEAD_RADIUS
+        self.is_clone    = is_clone
+        self.radius      = HEAD_RADIUS * CLONE_HEAD_SCALE if is_clone else HEAD_RADIUS
+        self._head_img   = _clone_head_img if is_clone else _head_img
+        self._head_size  = self._head_img.get_width()
+        self._split_cooldown = SPLIT_COOLDOWN
+        self._beam_tick      = 0.0
         self.anchored    = anchored and (wormhole is not None)
         self._spice      = spice_level
         self.flash_timer = 0.0
@@ -371,17 +385,17 @@ class TapewormHead(pygame.sprite.Sprite):
         self._free_vel = pygame.Vector2(math.cos(rad), math.sin(rad)) * FREE_SPEED
         self.position += self._free_vel * dt
         self._face(self._free_vel.x, self._free_vel.y)
-        if self.position.x < HEAD_RADIUS:
-            self.position.x  = HEAD_RADIUS
+        if self.position.x < self.radius:
+            self.position.x  = self.radius
             self._move_angle = random.uniform(-45, 45)
-        elif self.position.x > 1280 - HEAD_RADIUS:
-            self.position.x  = 1280 - HEAD_RADIUS
+        elif self.position.x > 1280 - self.radius:
+            self.position.x  = 1280 - self.radius
             self._move_angle = random.uniform(135, 225)
-        if self.position.y < HEAD_RADIUS:
-            self.position.y  = HEAD_RADIUS
+        if self.position.y < self.radius:
+            self.position.y  = self.radius
             self._move_angle = random.uniform(45, 135)
-        elif self.position.y > 720 - HEAD_RADIUS:
-            self.position.y  = 720 - HEAD_RADIUS
+        elif self.position.y > 720 - self.radius:
+            self.position.y  = 720 - self.radius
             self._move_angle = random.uniform(225, 315)
 
     # ── Main update ──────────────────────────────────────────────────────
@@ -395,6 +409,8 @@ class TapewormHead(pygame.sprite.Sprite):
                 self._spawning = False
         if self.flash_timer > 0:
             self.flash_timer = max(0.0, self.flash_timer - dt)
+        self._split_cooldown = max(0.0, self._split_cooldown - dt)
+        self._beam_tick      = max(0.0, self._beam_tick - dt)
         for seg in self.segments:
             if seg.flash_timer > 0:
                 seg.flash_timer = max(0.0, seg.flash_timer - dt)
@@ -436,16 +452,16 @@ class TapewormHead(pygame.sprite.Sprite):
                                              unsetcolor=(0,0,0,0)), rect.topleft)
 
         # Head
-        head_size = max(1, int(HEAD_SIZE * scale))
+        head_size = max(1, int(self._head_size * scale))
         head_pos  = pivot + (self.position - pivot) * scale
         rad_face  = math.radians(self.angle - 90)
         perp      = pygame.Vector2(-math.sin(rad_face), math.cos(rad_face))
         h_offset  = perp * math.sin(self._wriggle_t) * 5.0 * scale
-        if head_size != HEAD_SIZE:
+        if head_size != self._head_size:
             rotated = pygame.transform.scale(
-                pygame.transform.rotate(_head_img, self.angle), (head_size, head_size))
+                pygame.transform.rotate(self._head_img, self.angle), (head_size, head_size))
         else:
-            rotated = pygame.transform.rotate(_head_img, self.angle)
+            rotated = pygame.transform.rotate(self._head_img, self.angle)
         rect = rotated.get_rect(center=(int(head_pos.x + h_offset.x),
                                          int(head_pos.y + h_offset.y)))
         screen.blit(rotated, rect.topleft)
@@ -460,10 +476,12 @@ class TapewormHead(pygame.sprite.Sprite):
     def head_triangle(self):
         tail_dir = self._tail_dir()
         side     = pygame.Vector2(-tail_dir.y, tail_dir.x)
-        center   = self.position - tail_dir * HEAD_RADIUS * 0.6
-        tip      = center + tail_dir * HEAD_RADIUS * 0.6
-        left     = center - tail_dir * HEAD_RADIUS * 0.3 + side * (HEAD_RADIUS * 0.5 - 12)
-        right    = center - tail_dir * HEAD_RADIUS * 0.3 - side * (HEAD_RADIUS * 0.5 - 12)
+        hr       = self.radius
+        inset    = 12 * hr / HEAD_RADIUS
+        center   = self.position - tail_dir * hr * 0.6
+        tip      = center + tail_dir * hr * 0.6
+        left     = center - tail_dir * hr * 0.3 + side * (hr * 0.5 - inset)
+        right    = center - tail_dir * hr * 0.3 - side * (hr * 0.5 - inset)
         return [tip, left, right]
 
     def draw_debug(self, screen):
@@ -471,9 +489,9 @@ class TapewormHead(pygame.sprite.Sprite):
         side     = pygame.Vector2(-tail_dir.y, tail_dir.x)
         cx, cy   = int(self.position.x), int(self.position.y)
         pygame.draw.line(screen, (0, 100, 255), (cx, cy),
-                         (int(cx + tail_dir.x * HEAD_RADIUS), int(cy + tail_dir.y * HEAD_RADIUS)), 3)
+                         (int(cx + tail_dir.x * self.radius), int(cy + tail_dir.y * self.radius)), 3)
         pygame.draw.line(screen, (0, 255, 0), (cx, cy),
-                         (int(cx + side.x * HEAD_RADIUS * 0.5), int(cy + side.y * HEAD_RADIUS * 0.5)), 2)
+                         (int(cx + side.x * self.radius * 0.5), int(cy + side.y * self.radius * 0.5)), 2)
         pygame.draw.polygon(screen, (255, 0, 0),
                             [(int(p.x), int(p.y)) for p in self.head_triangle()], 2)
         for seg in self.segments:
@@ -497,26 +515,64 @@ class TapewormHead(pygame.sprite.Sprite):
             return True
         return False
 
-    def damage_segment(self, seg_index, spice_level):
-        if _audio_enabled and _snd_split:
-            _snd_split.play()
-        self.segments[seg_index].kill()
+    def beam_tick_ready(self):
+        """True at most once per BEAM_SEG_TICK — rate-limits milk beam segment damage."""
+        if self._beam_tick > 0:
+            return False
+        self._beam_tick = BEAM_SEG_TICK
+        return True
+
+    def damage_segment(self, seg_index, spice_level, live_heads=1):
+        """Hit segment seg_index. Splits into a new head when allowed; otherwise the
+        short end (or, at the head cap, the would-be new piece) crumbles away.
+        Returns positions of segments that crumbled, for particle effects."""
+        hit_seg = self.segments[seg_index]
+        # Split cooldown — hit just flashes
+        if self._split_cooldown > 0:
+            hit_seg.flash_timer = FLASH_DUR
+            return []
+
         head_side = self.segments[:seg_index]
         tail_side = self.segments[seg_index+1:]
+
+        # Too short to split, or head cap reached → crumble instead of splitting
+        if len(tail_side) < MIN_SPLIT_SEGS or live_heads >= MAX_LIVE_HEADS:
+            dropped       = [hit_seg] + tail_side
+            self.segments = head_side
+        elif len(head_side) < MIN_SPLIT_SEGS:
+            dropped       = head_side + [hit_seg]
+            self.segments = tail_side
+        else:
+            dropped = None
+
+        if dropped is not None:
+            for seg in dropped:
+                seg.kill()
+            if not self.segments and self.anchored:
+                # Nothing left to tether it — cut loose rather than lunge forever
+                self.anchored = False
+                self.wormhole = None
+            if _audio_enabled and _snd_hit:
+                _snd_hit.play()
+            return [pygame.Vector2(seg.position) for seg in dropped]
+
+        # ── Split ──
+        if _audio_enabled and _snd_split:
+            _snd_split.play()
+        hit_seg.kill()
         saved_wh  = self.wormhole
 
-        self.segments    = head_side
-        self.anchored    = False
-        self.wormhole    = None
-        self._move_angle = random.uniform(0, 360)
+        self.segments        = head_side
+        self.anchored        = False
+        self.wormhole        = None
+        self._split_cooldown = SPLIT_COOLDOWN
+        self._move_angle     = random.uniform(0, 360)
         self._face(self._free_vel.x, self._free_vel.y)
-
-        if not tail_side:
-            return None
 
         new_pos  = pygame.Vector2(tail_side[-1].position)
         new_head = TapewormHead(saved_wh, tail_side, spice_level,
-                                anchored=(saved_wh is not None), start_pos=new_pos)
+                                anchored=(saved_wh is not None), start_pos=new_pos,
+                                is_clone=True)
         if not saved_wh:
             new_head._move_angle = random.uniform(0, 360)
             new_head._face(new_head._free_vel.x, new_head._free_vel.y)
@@ -524,7 +580,7 @@ class TapewormHead(pygame.sprite.Sprite):
             while len(trail_pos) < new_head._trail.maxlen:
                 trail_pos.append(trail_pos[-1])
             new_head._trail = deque(trail_pos, maxlen=new_head._trail.maxlen)
-        return new_head
+        return []
 
 
 # ---------------------------------------------------------------------------
