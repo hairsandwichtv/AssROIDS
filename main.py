@@ -25,6 +25,7 @@ from tapeworm import WormHole, TapewormHead, TapewormSegment, create_tapeworm, W
 import tapeworm as _tapeworm_module
 from powerup import PowerUp
 from circleshape import DEBUG_HITBOXES
+import gamepad
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -41,6 +42,26 @@ class _FakeCircle:
     def __init__(self, pos, r):
         self.position = pos
         self.radius   = r
+
+# Controller layouts — {saved controller_config id: menu name}, in menu order.
+# Ids are stable so saved settings keep their layout; 1 (Click Accelerate) was removed.
+CONTROLLER_CONFIGS = {
+    0: "Single Stick - Push Accelerate",
+    2: "Single Stick - Trigger Accelerate",
+    3: "Twin Stick",
+    4: "Twin Stick (Reverse)",
+}
+CFG_TWIN_STICK         = 3   # left stick steers, right stick up/down = speed
+CFG_TWIN_STICK_REVERSE = 4   # right stick steers, left stick up/down = speed
+
+def valid_config(cfg):
+    """Saved layout id, or Push Accelerate if it's unknown/removed."""
+    return cfg if cfg in CONTROLLER_CONFIGS else 0
+
+def cycle_config(cfg, step):
+    """Next/previous layout id in menu order."""
+    ids = list(CONTROLLER_CONFIGS)
+    return ids[(ids.index(valid_config(cfg)) + step) % len(ids)]
 
 HIGHSCORE_FILE = writable_path("highscore.txt")
 SETTINGS_FILE  = writable_path("settings.json")
@@ -66,7 +87,7 @@ DEFAULT_SETTINGS = {
     "master_volume":    1.0,
     "mute_menu_song":   False,
     "shoot_key":        pygame.K_SPACE,
-    "controller_config": 0,   # 0=Push Accelerate, 1=Click Accelerate, 2=Trigger Accelerate
+    "controller_config": 0,   # key in CONTROLLER_CONFIGS (0 = Push Accelerate)
 }
 
 def load_settings():
@@ -222,19 +243,14 @@ def draw_settings_menu(surface, settings, font, small_font, waiting_for_key, set
     # Controller config selector
     cfg_label = small_font.render("CONTROLLER CONFIG", True, "white")
     surface.blit(cfg_label, (330, 372))
-    cfg_names = [
-        "Single Stick - Push Accelerate",
-        "Single Stick - Click Accelerate",
-        "Single Stick - Trigger Accelerate",
-    ]
-    current_cfg = settings.get("controller_config", 0)  # draw func reads settings directly — fine, called rarely
+    current_cfg = valid_config(settings.get("controller_config", 0))  # draw func reads settings directly — fine, called rarely
     left_arrow_rect  = pygame.Rect(330, 397, 30, 30)
     right_arrow_rect = pygame.Rect(920, 397, 30, 30)
     pygame.draw.polygon(surface, (200, 200, 200),
                         [(355, 397), (330, 412), (355, 427)])
     pygame.draw.polygon(surface, (200, 200, 200),
                         [(920, 397), (950, 412), (920, 427)])
-    cfg_surf = small_font.render(cfg_names[current_cfg], True, (100, 200, 255))
+    cfg_surf = small_font.render(CONTROLLER_CONFIGS[current_cfg], True, (100, 200, 255))
     surface.blit(cfg_surf, cfg_surf.get_rect(center=(640, 412)))
     # ESC / B hint
     esc_txt = small_font.render("ESC / B Button  —  Close Settings", True, (150, 150, 150))
@@ -345,31 +361,9 @@ def main():
     clock         = pygame.time.Clock()
     dt            = 0
 
-    # Controller state
-    _joystick        = None   # active controller, or None
-    CTRL_DEADZONE    = 0.05   # ignore stick drift below this threshold
-    CTRL_AXIS_LX     = 0      # left stick X
-    CTRL_AXIS_LY     = 1      # left stick Y
-    CTRL_AXIS_RTRIG  = 5      # right trigger (shoot)
-    CTRL_AXIS_LTRIG  = 4      # left trigger
-    CTRL_OUTER_ZONE  = 0.90   # past this = rotate + thrust, below = rotate only
-    CTRL_BTN_A       = 0      # A button (shoot)
-    CTRL_BTN_B       = 1      # B button (close menus)
-    CTRL_BTN_X       = 2      # X button (reverse modifier)
-    CTRL_BTN_LB      = 4      # left bumper (boost)
-    CTRL_BTN_L3      = 8      # left stick click (forward thrust)
-    CTRL_BTN_START   = 7      # start button
-
-    def _apply_deadzone(val, dz):
-        """Return 0 if |val| < deadzone, else rescale to 0-1 range."""
-        if abs(val) < dz:
-            return 0.0
-        return (val - dz * (1 if val > 0 else -1)) / (1.0 - dz)
-
-    # Connect any already-plugged-in controller
-    if pygame.joystick.get_count() > 0:
-        _joystick = pygame.joystick.Joystick(0)
-        _joystick.init()
+    # Controller — normalized Xbox-style layout, deadzones and triggers handled in gamepad.py
+    pad             = gamepad.Gamepad()
+    CTRL_OUTER_ZONE = 0.875   # Push Accelerate: past this (deadzone-rescaled) = rotate + thrust
 
     menu_bg_original = pygame.image.load(asset_path("AssROIDS Menu BG.png")).convert()
     menu_bg          = pygame.transform.scale(menu_bg_original, internal_res)
@@ -565,14 +559,13 @@ def main():
     ctrl_boost     = False
     ctrl_l3        = False
     ctrl_shoot     = False
-    ctrl_any_btn  = False   # any button pressed this frame
-    ctrl_prev_btn = False   # button state last frame (for edge detection)
+    ctrl_speed     = 0.0
 
     # Menu navigation — 0=start, 1=exit, 2=readme, 3=settings
     # -1 means mouse is in control
     menu_selection     = -1
     _ctrl_nav_cooldown = 0.0  # prevents too-fast navigation
-    ctrl_config = settings.get("controller_config", 0)  # cached — only updated on change
+    ctrl_config = valid_config(settings.get("controller_config", 0))  # cached — only updated on change
 
     # Anti-turtle timer — spawns enemy ship if no boss in 2 minutes (reduced by hardness)
     ANTI_TURTLE_BASE   = 75.0  # seconds before anti-turtle ship spawns
@@ -596,18 +589,10 @@ def main():
                 screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
 
             # Controller hot-plug support
-            if event.type == pygame.JOYDEVICEADDED:
-                _joystick = pygame.joystick.Joystick(event.device_index)
-                _joystick.init()
-            if event.type == pygame.JOYDEVICEREMOVED:
-                _joystick = None
+            pad.handle_event(event)
 
             # Pause toggle — ESC or Start button during game
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                if state == "GAME" or state == "PAUSED":
-                    paused = not paused
-                    state  = "PAUSED" if paused else "GAME"
-            if event.type == pygame.JOYBUTTONDOWN and event.button == CTRL_BTN_START:
                 if state == "GAME" or state == "PAUSED":
                     paused = not paused
                     state  = "PAUSED" if paused else "GAME"
@@ -620,11 +605,6 @@ def main():
                 waiting_for_key = False
 
             if settings_open and event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                settings_open = False
-                save_settings(settings)
-
-            # B button closes settings
-            if settings_open and event.type == pygame.JOYBUTTONDOWN and event.button == CTRL_BTN_B:
                 settings_open = False
                 save_settings(settings)
 
@@ -647,11 +627,11 @@ def main():
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
                     save_settings(settings)
                 elif cfg_left_area.collidepoint(mx, my):
-                    ctrl_config = (ctrl_config - 1) % 3
+                    ctrl_config = cycle_config(ctrl_config, -1)
                     settings["controller_config"] = ctrl_config
                     save_settings(settings)
                 elif cfg_right_area.collidepoint(mx, my):
-                    ctrl_config = (ctrl_config + 1) % 3
+                    ctrl_config = cycle_config(ctrl_config, 1)
                     settings["controller_config"] = ctrl_config
                     save_settings(settings)
                 elif mute_box.collidepoint(mx, my):
@@ -664,56 +644,48 @@ def main():
         internal_surf.fill("black")
 
         # Read controller state once per frame — available to all states
-        ctrl_angle     = None
+        pad.update()
+        ctrl_angle     = pad.left_angle()
         ctrl_magnitude = 0.0
-        ctrl_throttle  = 0.0
-        ctrl_x_held    = False
-        ctrl_dpad_fwd  = False
-        ctrl_dpad_back = False
-        ctrl_dpad_left = False
-        ctrl_dpad_right= False
-        ctrl_boost = ctrl_l3 = ctrl_shoot = False
-        ctrl_prev_btn = ctrl_any_btn
-        ctrl_any_btn  = False
-        ctrl_nav_x    = 0
-        ctrl_nav_y    = 0
-        if _joystick:
-            try:
-                raw_lx = _joystick.get_axis(CTRL_AXIS_LX)
-                raw_ly = _joystick.get_axis(CTRL_AXIS_LY)
-                raw_rt = _joystick.get_axis(CTRL_AXIS_RTRIG)
-                ctrl_x_held = _joystick.get_button(CTRL_BTN_X) == 1
-                magnitude = (raw_lx**2 + raw_ly**2) ** 0.5
-                if magnitude > CTRL_DEADZONE:
-                    ctrl_angle = math.degrees(math.atan2(-raw_lx, raw_ly))
-                    # Config 0: Push Accelerate — outer zone = thrust
-                    if ctrl_config == 0 and magnitude > CTRL_OUTER_ZONE:
-                        ctrl_magnitude = min(1.0, (magnitude - CTRL_OUTER_ZONE) / (1.0 - CTRL_OUTER_ZONE))
-                raw_lt         = _joystick.get_axis(CTRL_AXIS_LTRIG)
-                ctrl_throttle  = (raw_lt + 1.0) / 2.0   # 0.0 = not pressed, 1.0 = full
-                ctrl_boost   = _joystick.get_button(CTRL_BTN_LB) == 1
-                ctrl_l3      = _joystick.get_button(CTRL_BTN_L3) == 1
-                ctrl_shoot   = raw_rt > 0.0 or _joystick.get_button(CTRL_BTN_A) == 1
-                ctrl_any_btn = any(_joystick.get_button(i)
-                                   for i in range(_joystick.get_numbuttons()))
-                # D-pad navigation
-                if _joystick.get_numhats() > 0:
-                    hat = _joystick.get_hat(0)
-                    ctrl_nav_x = hat[0]   # -1=left, 1=right
-                    ctrl_nav_y = hat[1]   # hat Y
-                    # D-pad movement (works on all configs like W/A/S/D)
-                    ctrl_dpad_fwd   = hat[1] == 1
-                    ctrl_dpad_back  = hat[1] == -1
-                    ctrl_dpad_left  = hat[0] == -1
-                    ctrl_dpad_right = hat[0] == 1
-                # Left stick also navigates if no D-pad input
-                if ctrl_nav_x == 0 and ctrl_nav_y == 0:
-                    if raw_lx < -0.5: ctrl_nav_x = -1
-                    elif raw_lx >  0.5: ctrl_nav_x = 1
-                    if raw_ly < -0.5: ctrl_nav_y = 1
-                    elif raw_ly >  0.5: ctrl_nav_y = -1
-            except pygame.error:
-                _joystick = None   # controller disconnected unexpectedly
+        ctrl_speed     = 0.0
+        # Twin Stick: one stick steers, the other's up/down sets speed (no strafing)
+        if ctrl_config in (CFG_TWIN_STICK, CFG_TWIN_STICK_REVERSE):
+            steer_left = ctrl_config == CFG_TWIN_STICK
+            ctrl_angle = pad.left_angle() if steer_left else pad.right_angle()
+            push       = pad.stick_up("right" if steer_left else "left")
+            ctrl_speed = math.copysign(gamepad.apply_curve(abs(push)), push) if push else 0.0
+        # Config 0: Push Accelerate — outer zone = thrust
+        if ctrl_config == 0 and pad.l_mag > CTRL_OUTER_ZONE:
+            ctrl_magnitude = min(1.0, (pad.l_mag - CTRL_OUTER_ZONE) / (1.0 - CTRL_OUTER_ZONE))
+        ctrl_throttle   = gamepad.apply_curve(pad.lt)   # 0.0 = not pressed, 1.0 = full
+        ctrl_x_held     = pad.held(gamepad.X)
+        # Boost: LB everywhere; Twin Stick also boosts on clicking the speed stick (R3)
+        ctrl_boost      = pad.held(gamepad.LB) or (ctrl_config == CFG_TWIN_STICK and pad.held(gamepad.R3))
+        ctrl_l3         = pad.held(gamepad.L3)
+        ctrl_shoot      = pad.rt > 0 or pad.held(gamepad.A)
+        ctrl_confirm_a  = pad.pressed(gamepad.A)
+        # D-pad movement (works on all configs like W/A/S/D)
+        ctrl_dpad_fwd   = pad.held(gamepad.DPAD_UP)
+        ctrl_dpad_back  = pad.held(gamepad.DPAD_DOWN)
+        ctrl_dpad_left  = pad.held(gamepad.DPAD_LEFT)
+        ctrl_dpad_right = pad.held(gamepad.DPAD_RIGHT)
+        # Menu navigation — D-pad first, left stick if no D-pad input
+        ctrl_nav_x = ctrl_dpad_right - ctrl_dpad_left
+        ctrl_nav_y = ctrl_dpad_fwd - ctrl_dpad_back
+        if ctrl_nav_x == 0 and ctrl_nav_y == 0:
+            if pad.lx < -0.4: ctrl_nav_x = -1
+            elif pad.lx > 0.4: ctrl_nav_x = 1
+            if pad.ly < -0.4: ctrl_nav_y = 1
+            elif pad.ly > 0.4: ctrl_nav_y = -1
+
+        # Start toggles pause during game
+        if pad.pressed(gamepad.START) and state in ("GAME", "PAUSED"):
+            paused = not paused
+            state  = "PAUSED" if paused else "GAME"
+        # B closes settings
+        if settings_open and pad.pressed(gamepad.B):
+            settings_open = False
+            save_settings(settings)
 
         # ===================================================================
         # MENU STATE
@@ -730,7 +702,7 @@ def main():
             if pygame.mouse.get_rel() != (0, 0):
                 menu_selection = -1
             _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
-            if not settings_open and _joystick and _ctrl_nav_cooldown <= 0 and (ctrl_nav_x != 0 or ctrl_nav_y != 0):
+            if not settings_open and pad.connected and _ctrl_nav_cooldown <= 0 and (ctrl_nav_x != 0 or ctrl_nav_y != 0):
                 if menu_selection == -1:
                     menu_selection = 0   # enter controller mode on first input
                 else:
@@ -756,10 +728,7 @@ def main():
                                  sel_btn.rect.inflate(8, 8), 3, border_radius=6)
 
             # A button or Start button selects
-            ctrl_confirm = (ctrl_any_btn and not ctrl_prev_btn
-                            and menu_selection >= 0
-                            and _joystick
-                            and _joystick.get_button(CTRL_BTN_A) == 1)
+            ctrl_confirm = ctrl_confirm_a and menu_selection >= 0
 
             if start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 0):
                 if audio_enabled:
@@ -860,7 +829,7 @@ def main():
             if settings_open:
                 draw_settings_menu(internal_surf, settings, font, small_font, waiting_for_key, settings_row)
                 # Controller navigation inside settings
-                if _joystick and not waiting_for_key:
+                if pad.connected and not waiting_for_key:
                     _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
                     if _ctrl_nav_cooldown <= 0 and ctrl_nav_y != 0:
                         # Up/Down navigates rows
@@ -879,13 +848,13 @@ def main():
                             apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
                             save_settings(settings)
                         elif settings_row == 3:  # Controller config
-                            ctrl_config = (ctrl_config + (1 if ctrl_nav_x == 1 else -1)) % 3
+                            ctrl_config = cycle_config(ctrl_config, 1 if ctrl_nav_x == 1 else -1)
                             settings["controller_config"] = ctrl_config
                             save_settings(settings)
                         _ctrl_nav_cooldown = 0.20
                         if audio_enabled and tick_sound: tick_sound.play()
                     # A button confirms/toggles selected row
-                    if ctrl_any_btn and not ctrl_prev_btn and _joystick.get_button(CTRL_BTN_A) == 1:
+                    if ctrl_confirm_a:
                         if settings_row == 1:   # Mute — A toggles
                             settings["mute_menu_song"] = not settings["mute_menu_song"]
                             apply_settings(settings, audio_enabled, all_sounds_list, in_game=(state == "GAME"))
@@ -902,7 +871,7 @@ def main():
             # Suppress shoot for a few frames after entering game
             # Wait for A button release before allowing controller shoot
             if _suppress_ctrl_shoot:
-                if not (_joystick and _joystick.get_button(CTRL_BTN_A) == 1):
+                if not pad.held(gamepad.A):
                     _suppress_ctrl_shoot = False
                 ctrl_shoot = False
             if keys[Player.shoot_key] or ctrl_shoot:
@@ -920,7 +889,7 @@ def main():
                           ctrl_throttle=ctrl_throttle, ctrl_x_held=ctrl_x_held,
                           ctrl_dpad_fwd=ctrl_dpad_fwd, ctrl_dpad_back=ctrl_dpad_back,
                           ctrl_dpad_left=ctrl_dpad_left, ctrl_dpad_right=ctrl_dpad_right,
-                          ctrl_l3=ctrl_l3, ctrl_boost=ctrl_boost, ctrl_shoot=ctrl_shoot,
+                          ctrl_l3=ctrl_l3, ctrl_boost=ctrl_boost, ctrl_shoot=ctrl_shoot, ctrl_speed=ctrl_speed,
                           ctrl_config=ctrl_config)
             stars.update(dt, hardness=AsteroidField.speed_multiplier)
             # Update standard objects (shots, asteroids, powerups, field)
@@ -1708,7 +1677,7 @@ def main():
 
             # Controller nav in pause menu
             _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
-            if _joystick and _ctrl_nav_cooldown <= 0 and ctrl_nav_y != 0:
+            if pad.connected and _ctrl_nav_cooldown <= 0 and ctrl_nav_y != 0:
                 pause_selection = (pause_selection + (-1 if ctrl_nav_y == 1 else 1)) % 2
                 _ctrl_nav_cooldown = 0.2
                 if audio_enabled and tick_sound: tick_sound.play()
@@ -1717,7 +1686,7 @@ def main():
             pause_confirm = False
             if pygame.key.get_pressed()[pygame.K_RETURN]:
                 pause_confirm = True
-            if _joystick and ctrl_any_btn and not ctrl_prev_btn and _joystick.get_button(CTRL_BTN_A):
+            if ctrl_confirm_a:
                 pause_confirm = True
 
             if pause_confirm:
@@ -1744,7 +1713,7 @@ def main():
             wh = warp_flash_wormhole
 
             # Player can still move during flash
-            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier, ctrl_angle=ctrl_angle, ctrl_magnitude=ctrl_magnitude, ctrl_throttle=ctrl_throttle, ctrl_x_held=ctrl_x_held, ctrl_dpad_fwd=ctrl_dpad_fwd, ctrl_dpad_back=ctrl_dpad_back, ctrl_dpad_left=ctrl_dpad_left, ctrl_dpad_right=ctrl_dpad_right, ctrl_l3=ctrl_l3, ctrl_boost=ctrl_boost, ctrl_shoot=ctrl_shoot, ctrl_config=ctrl_config)
+            player.update(dt, speed_multiplier=AsteroidField.speed_multiplier, ctrl_angle=ctrl_angle, ctrl_magnitude=ctrl_magnitude, ctrl_throttle=ctrl_throttle, ctrl_x_held=ctrl_x_held, ctrl_dpad_fwd=ctrl_dpad_fwd, ctrl_dpad_back=ctrl_dpad_back, ctrl_dpad_left=ctrl_dpad_left, ctrl_dpad_right=ctrl_dpad_right, ctrl_l3=ctrl_l3, ctrl_boost=ctrl_boost, ctrl_shoot=ctrl_shoot, ctrl_speed=ctrl_speed, ctrl_config=ctrl_config)
 
             # Cancel if player leaves wormhole
             if wh and wh.alive():
@@ -1991,7 +1960,7 @@ def main():
             new_key = any(k and i not in _stats_keys_on_open
                          for i, k in enumerate(keys_pressed))
             # Controller: any button pressed this frame (edge detect)
-            ctrl_close = ctrl_any_btn and not ctrl_prev_btn and stats_timer > 1.0
+            ctrl_close = pad.any_pressed() and stats_timer > 1.0
             if new_key or ctrl_close:
                 if audio_enabled:
                     if credits_tune:

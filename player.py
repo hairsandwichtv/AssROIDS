@@ -178,7 +178,7 @@ class Player(CircleShape):
                ctrl_angle=None, ctrl_magnitude=0.0, ctrl_throttle=0.0,
                ctrl_x_held=False, ctrl_dpad_fwd=False, ctrl_dpad_back=False,
                ctrl_dpad_left=False, ctrl_dpad_right=False,
-               ctrl_l3=False, ctrl_boost=False, ctrl_shoot=False, ctrl_config=0):
+               ctrl_l3=False, ctrl_boost=False, ctrl_shoot=False, ctrl_speed=0.0, ctrl_config=0):
 
         # --- Timers ---
         if self.timer          > 0: self.timer          -= dt
@@ -200,10 +200,11 @@ class Player(CircleShape):
         keys = pygame.key.get_pressed()
         self.is_firing_beam = self.milk_beam_active and (keys[Player.shoot_key] or ctrl_shoot)
 
-        # Boost — keyboard Shift, LB, or L3 (L3 excluded on config 1)
+        # Boost — keyboard Shift, LB, or L3 (L3 excluded on config 3, where it's
+        # the steering stick; R3 handled in main)
         boost_held = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
                       or ctrl_boost
-                      or (ctrl_l3 and ctrl_config != 1))
+                      or (ctrl_l3 and ctrl_config != 3))
 
         # --- Thruster ---
         if self.thruster_active:
@@ -256,20 +257,18 @@ class Player(CircleShape):
                 self.move(dt, boost=boosting)
                 self.is_moving = True
 
-        elif ctrl_config == 1:
-            # Click Accelerate: L3 = forward, LT or X = reverse, LB = boost
-            if reverse:
-                self.move(-(ctrl_throttle if ctrl_throttle > 0.05 else 1.0) * dt, boost=boosting)
-                self.is_moving = True
-            elif (ctrl_l3 or boosting) and not self.is_moving:
-                self.move(dt, boost=boosting)
-                self.is_moving = True
-
         elif ctrl_config == 2:
             # Trigger Accelerate: LT = forward, X = reverse, L3/LB = boost
             if (ctrl_throttle > 0.05 or boosting) and not self.is_moving:
                 direction = -1 if ctrl_x_held else 1
                 self.move(direction * dt, boost=boosting)
+                self.is_moving = True
+
+        elif ctrl_config in (3, 4):
+            # Twin Stick / Twin Stick (Reverse): speed stick up = forward, down = reverse,
+            # analog speed; ship only moves along its nose (no strafing)
+            if not self.is_moving and (ctrl_speed != 0 or boosting):
+                self.move((ctrl_speed if ctrl_speed != 0 else 1.0) * dt, boost=boosting)
                 self.is_moving = True
 
         # --- Screen clamping ---

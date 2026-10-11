@@ -75,7 +75,7 @@ a = Analysis(
         ('Credits Tune.mp3',            '.'),
         ('Explosion - SFX.mp3',         '.'),
     ],
-    hiddenimports=[],
+    hiddenimports=['pygame._sdl2.controller'],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
