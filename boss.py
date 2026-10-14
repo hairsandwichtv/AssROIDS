@@ -168,12 +168,16 @@ class Boss(CircleShape):
         dy = oy - cy
         lx =  cos_a * dx + sin_a * dy
         ly = -sin_a * dx + cos_a * dy
-        # Flat bottom — clamp ly at flat threshold
-        ly_clamped  = min(ly, b * CP_EGG_FLAT)
-        taper_scale = max(0.1, 1.0 + CP_EGG_TAPER * (ly_clamped / b))
-        tapered_a   = (a + r) * taper_scale
-        if (lx / tapered_a) ** 2 + (ly_clamped / (b + r)) ** 2 <= 1.0:
-            return True
+        # Flat bottom — clamp ly at the flat threshold, but anything past the base (plus the
+        # other circle's radius) is outside. Clamping alone made the egg extend forever
+        # behind his butt, so the pre-charge 180° spin swept that strip across the player
+        # and "hit" them from across the screen.
+        if ly <= b * CP_EGG_FLAT + r:
+            ly_clamped  = min(ly, b * CP_EGG_FLAT)
+            taper_scale = max(0.1, 1.0 + CP_EGG_TAPER * (ly_clamped / b))
+            tapered_a   = (a + r) * taper_scale
+            if (lx / tapered_a) ** 2 + (ly_clamped / (b + r)) ** 2 <= 1.0:
+                return True
         # Two bottom circles
         for (ccx, ccy) in (c1, c2):
             if math.hypot(ox - ccx, oy - ccy) <= cr + r:
