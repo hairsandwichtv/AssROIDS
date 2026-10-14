@@ -13,6 +13,11 @@ INVINCIBLE_DURATION  = 1.5
 THRUSTER_DURATION    = 1.0
 THRUSTER_RECHARGE    = 60.0
 DP_DURATION          = 15.0  # seconds double-shot lasts
+# Hard mode — inertia. Inputs thrust instead of moving the ship directly.
+INERTIA_ACCEL       = 400.0  # px/s² along the nose (x2 while boosting) — top speed in ~0.5s
+INERTIA_BRAKE       = 400.0  # px/s² the brake sheds — same as thrust
+INERTIA_COAST_HALF  = 3.0    # coasting with no input loses half its speed every this many seconds
+
 # Endowments — picked at The Inflation Station, kept for the whole run
 ENDOWMENT_MAX_LEVEL = 10
 RUNS_SPEED_STEP     = 0.10   # The Runs: +10% move speed per level
@@ -28,8 +33,10 @@ class Player(CircleShape):
     shoot_key = pygame.K_SPACE  # rebindable from settings menu
     brake_key = pygame.K_LALT   # rebindable from settings menu
 
-    def __init__(self, x, y):
+    def __init__(self, x, y, hard_mode=False):
         super().__init__(x, y, PLAYER_RADIUS)
+        self.hard_mode = hard_mode   # inertia on: thrust/coast/brake instead of direct movement
+        self._thrust   = 0.0         # hard mode: this frame's signed thrust input (in dt units)
         self.rotation = 0
         self.timer    = 0
         size = int(self.radius * 2)
@@ -203,6 +210,9 @@ class Player(CircleShape):
     def move(self, dt, boost=False):
         if self.is_braking:
             return  # brake cancels all forward/backward movement; rotation still works
+        if self.hard_mode:
+            self._thrust += dt   # turned into acceleration by _apply_inertia
+            return
         forward = pygame.Vector2(0, 1).rotate(self.rotation)
         speed   = self.move_speed * (2.0 if boost else 1.0)
         self.position += forward * speed * dt
@@ -284,6 +294,7 @@ class Player(CircleShape):
 
         # --- Movement ---
         self.is_moving = False
+        self._thrust   = 0.0
 
         # Keyboard + D-pad rotation and thrust
         if keys[pygame.K_a] or ctrl_dpad_left:  self.rotate(-dt)
@@ -329,6 +340,33 @@ class Player(CircleShape):
         if self.is_braking:
             self.is_moving = False   # no exhaust trail while held still
 
+        if self.hard_mode:
+            self._apply_inertia(dt, boosting)
+
         # --- Screen clamping ---
-        self.position.x = max(self.radius, min(self.position.x, 1280 - self.radius))
-        self.position.y = max(self.radius, min(self.position.y, 720  - self.radius))
+        clamped_x = max(self.radius, min(self.position.x, 1280 - self.radius))
+        clamped_y = max(self.radius, min(self.position.y, 720  - self.radius))
+        if clamped_x != self.position.x: self.velocity.x = 0   # slide along walls, don't stick
+        if clamped_y != self.position.y: self.velocity.y = 0
+        self.position.x, self.position.y = clamped_x, clamped_y
+
+    def _apply_inertia(self, dt, boosting):
+        """Hard mode: thrust accelerates, brake decelerates, otherwise coast with light drag."""
+        if dt <= 0:
+            return
+        forward = pygame.Vector2(0, 1).rotate(self.rotation)
+        thrust  = max(-1.0, min(1.0, self._thrust / dt))   # analog sticks give partial thrust
+        cap     = self.move_speed * (2.0 if boosting else 1.0)
+        speed   = self.velocity.length()
+        if self.is_braking:
+            if speed > 0:
+                self.velocity *= max(0.0, speed - INERTIA_BRAKE * dt) / speed
+        elif thrust:
+            self.velocity += forward * thrust * INERTIA_ACCEL * (2.0 if boosting else 1.0) * dt
+        else:
+            self.velocity *= 0.5 ** (dt / INERTIA_COAST_HALF)
+        # Over the cap (thrusting, or boost just ended) — ease back down at brake rate
+        speed = self.velocity.length()
+        if speed > cap:
+            self.velocity *= max(cap, speed - INERTIA_BRAKE * dt) / speed
+        self.position += self.velocity * dt

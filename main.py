@@ -67,21 +67,23 @@ def cycle_config(cfg, step):
     ids = list(CONTROLLER_CONFIGS)
     return ids[(ids.index(valid_config(cfg)) + step) % len(ids)]
 
-HIGHSCORE_FILE = writable_path("highscore.txt")
+# Separate high scores per mode — Flacid keeps the original file so old scores carry over
+HIGHSCORE_FILES = {False: writable_path("highscore.txt"),        # Flacid
+                   True:  writable_path("highscore_hard.txt")}   # Hard
 SETTINGS_FILE  = writable_path("settings.json")
 
 # ---------------------------------------------------------------------------
 # High score
 # ---------------------------------------------------------------------------
-def load_high_score():
+def load_high_score(hard_mode=False):
     try:
-        with open(HIGHSCORE_FILE, "r") as f:
+        with open(HIGHSCORE_FILES[hard_mode], "r") as f:
             return int(f.read().strip())
     except (FileNotFoundError, ValueError):
         return 0
 
-def save_high_score(score):
-    with open(HIGHSCORE_FILE, "w") as f:
+def save_high_score(score, hard_mode=False):
+    with open(HIGHSCORE_FILES[hard_mode], "w") as f:
         f.write(str(score))
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,7 @@ DEFAULT_SETTINGS = {
     "shoot_key":        pygame.K_SPACE,
     "brake_key":        pygame.K_LALT,
     "controller_config": 0,   # key in CONTROLLER_CONFIGS (0 = Push Accelerate)
+    "last_mode":        "flacid",  # "flacid" or "hard" — pre-selected in the Play mode picker
 }
 
 def load_settings():
@@ -265,6 +268,40 @@ def draw_settings_menu(surface, settings, font, small_font, waiting_for_key, set
     surface.blit(esc_txt, (640 - esc_txt.get_width() // 2, 555))
     return slider_bg, box_rect, bind_rects, left_arrow_rect, right_arrow_rect
 
+# Play → mode picker. Index 0 = Flacid (classic), 1 = Hard (inertia)
+GAME_MODES = [
+    ("FLACID", "Classic controls",  "Stops when you let go"),
+    ("HARD",   "Inertia: you drift", "Thrust to go, brake to stop"),
+]
+
+def mode_picker_rects():
+    return [pygame.Rect(320 + i * 340, 300, 300, 170) for i in range(len(GAME_MODES))]
+
+_PICKER_OVERLAY = None
+
+def draw_mode_picker(surface, selection, font, small_font):
+    global _PICKER_OVERLAY
+    if _PICKER_OVERLAY is None:
+        _PICKER_OVERLAY = pygame.Surface((1280, 720), pygame.SRCALPHA)
+        _PICKER_OVERLAY.fill((0, 0, 0, 180))
+    surface.blit(_PICKER_OVERLAY, (0, 0))
+    title = font.render("CHOOSE YOUR FIRMNESS", True, (255, 215, 0))
+    surface.blit(title, title.get_rect(center=(640, 250)))
+    for i, rect in enumerate(mode_picker_rects()):
+        name, line1, line2 = GAME_MODES[i]
+        selected = i == selection
+        pygame.draw.rect(surface, (40, 30, 48) if selected else (28, 28, 38), rect, border_radius=12)
+        pygame.draw.rect(surface, (255, 215, 0) if selected else (150, 150, 160), rect,
+                         3 if selected else 2, border_radius=12)
+        name_s = font.render(name, True, (255, 215, 0) if selected else "white")
+        surface.blit(name_s, name_s.get_rect(center=(rect.centerx, rect.y + 50)))
+        for k, line in enumerate((line1, line2)):
+            txt = small_font.render(line, True, (170, 170, 170))
+            surface.blit(txt, txt.get_rect(center=(rect.centerx, rect.y + 100 + k * 28)))
+    hint = small_font.render("Left / Right to choose  —  Enter / A to blast off  —  Esc / B to go back",
+                             True, (150, 150, 150))
+    surface.blit(hint, hint.get_rect(center=(640, 510)))
+
 _THRUSTERS_LABEL = None  # cached once after fonts are created
 
 def draw_thruster_bar(surface, x, y, width, height, charge, active, locked, font, tick):
@@ -293,12 +330,12 @@ def draw_thruster_bar(surface, x, y, width, height, charge, active, locked, font
                  (x + width // 2 - _THRUSTERS_LABEL.get_width() // 2,
                   y + height // 2 - _THRUSTERS_LABEL.get_height() // 2))
 
-def player_death(score, high_score, audio_enabled, death_sound, death_sfx_length):
-    """Trigger player death — play SFX, save score, stop other audio.
+def player_death(score, high_score, audio_enabled, death_sound, death_sfx_length, hard_mode=False):
+    """Trigger player death — play SFX, save score (to this mode's file), stop other audio.
     Returns (high_score, death_freeze_timer) — caller sets state to DYING."""
     if score > high_score:
         high_score = score
-        save_high_score(high_score)
+        save_high_score(high_score, hard_mode)
     if audio_enabled:
         pygame.mixer.stop()
         pygame.mixer.music.stop()
@@ -549,6 +586,10 @@ def main():
     settings        = load_settings()
     apply_settings(settings, audio_enabled, all_sounds_list, in_game=False)
     settings_open   = False
+    mode_picker_open  = False   # Play → Flacid / Hard choice
+    mode_selection    = 0
+    mode_pick_delay   = 0.0     # ignore confirms right after opening
+    hard_mode         = False   # mode of the current run
     waiting_for_key = None   # setting name being rebound ("shoot_key"/"brake_key"), or None
     paused              = False
     pause_selection     = 0   # 0=Resume, 1=Main Menu
@@ -561,7 +602,8 @@ def main():
     butts_busted      = 0
     first_shot_fired  = False
     total_shots_fired = 0
-    high_score        = load_high_score()
+    high_scores       = {False: load_high_score(False), True: load_high_score(True)}  # menu shows both
+    high_score        = high_scores[False]   # the current run's mode — set when a game starts
 
     SHAKE_DURATION  = 0.45
     SHAKE_INTENSITY = 10
@@ -642,13 +684,16 @@ def main():
     # HUD render cache — surfaces only rebuilt when values change
     _hud_score   = _hud_spice = _hud_hard = None
     _hud_score_v = _hud_spice_v = _hud_hard_v = None
-    _hs_label    = font.render("HIGHEST SCORE", True, (255, 215, 0))
-    _hs_value    = None
-    _hs_value_v  = None
+    _hs_labels   = {False: font.render("FLACID HIGH SCORE", True, (255, 215, 0)),
+                    True:  font.render("HARD HIGH SCORE",   True, (130, 0, 25))}
+    _hs_values   = {}   # rendered value surfaces, keyed by (mode, score)
 
     while True:
         inflation_nav     = 0       # Endowment menu input gathered from this frame's events
         inflation_confirm = False
+        picker_nav        = 0       # mode picker input gathered from this frame's events
+        picker_confirm    = False
+        picker_cancel     = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -659,6 +704,25 @@ def main():
 
             # Controller hot-plug support
             pad.handle_event(event)
+
+            # Mode picker — keyboard and mouse
+            if state == "MENU" and mode_picker_open:
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_a, pygame.K_LEFT):
+                        picker_nav = -1
+                    elif event.key in (pygame.K_d, pygame.K_RIGHT):
+                        picker_nav = 1
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                        picker_confirm = True
+                    elif event.key == pygame.K_ESCAPE:
+                        picker_cancel = True
+                elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                    mpos = to_internal(screen, event.pos)
+                    for i, rect in enumerate(mode_picker_rects()):
+                        if rect.collidepoint(mpos):
+                            mode_selection = i
+                            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                                picker_confirm = True
 
             # Endowment menu — keyboard and mouse
             if state == "INFLATION":
@@ -785,17 +849,20 @@ def main():
         # ===================================================================
         if state == "MENU":
             internal_surf.blit(menu_bg, (0, 0))
-            if high_score != _hs_value_v:
-                _hs_value   = font.render(str(high_score), True, "white")
-                _hs_value_v = high_score
-            internal_surf.blit(_hs_label, (640 - _hs_label.get_width() // 2, 100))
-            internal_surf.blit(_hs_value, (640 - _hs_value.get_width() // 2, 130))
+            high_scores[hard_mode] = max(high_scores[hard_mode], high_score)   # fold in the last run
+            for mode, cx in ((False, 440), (True, 840)):
+                key = (mode, high_scores[mode])
+                if key not in _hs_values:
+                    _hs_values[key] = font.render(str(high_scores[mode]), True, "white")
+                label = _hs_labels[mode]
+                internal_surf.blit(label, (cx - label.get_width() // 2, 100))
+                internal_surf.blit(_hs_values[key], (cx - _hs_values[key].get_width() // 2, 130))
 
             # Controller menu navigation — blocked when settings open
             if pygame.mouse.get_rel() != (0, 0):
                 menu_selection = -1
             _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
-            if not settings_open and pad.connected and _ctrl_nav_cooldown <= 0 and (ctrl_nav_x != 0 or ctrl_nav_y != 0):
+            if not settings_open and not mode_picker_open and pad.connected and _ctrl_nav_cooldown <= 0 and (ctrl_nav_x != 0 or ctrl_nav_y != 0):
                 if menu_selection == -1:
                     menu_selection = 0   # enter controller mode on first input
                 else:
@@ -823,7 +890,35 @@ def main():
             # A button or Start button selects
             ctrl_confirm = ctrl_confirm_a and menu_selection >= 0
 
-            if start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 0):
+            # Mode picker — choosing a mode is what actually starts the game
+            start_game = False
+            if mode_picker_open:
+                if pad.connected and _ctrl_nav_cooldown <= 0 and ctrl_nav_x != 0:
+                    picker_nav = ctrl_nav_x
+                    _ctrl_nav_cooldown = 0.25
+                if pad.pressed(gamepad.B):
+                    picker_cancel = True
+                if picker_nav:
+                    mode_selection = (mode_selection + picker_nav) % len(GAME_MODES)
+                    if audio_enabled and tick_sound: tick_sound.play()
+                mode_pick_delay = max(0.0, mode_pick_delay - dt)
+                if picker_cancel:
+                    mode_picker_open = False
+                elif (picker_confirm or ctrl_confirm_a) and mode_pick_delay <= 0:
+                    mode_picker_open = False
+                    hard_mode        = mode_selection == 1
+                    high_score       = high_scores[hard_mode]
+                    settings["last_mode"] = "hard" if hard_mode else "flacid"
+                    save_settings(settings)
+                    start_game = True
+
+            start_pressed = start_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 0)
+            if start_pressed and not mode_picker_open and not settings_open:
+                mode_picker_open = True
+                mode_selection   = 1 if settings.get("last_mode") == "hard" else 0
+                mode_pick_delay  = 0.25
+
+            if start_game:
                 if audio_enabled:
                     blast_off_sound.play()
                     pygame.mixer.music.stop()
@@ -883,7 +978,7 @@ def main():
                 WormHole.containers          = (wormholes,      updatable, drawable)
                 TapewormHead.containers      = (tapeworm_heads, updatable, drawable)
                 InflationStation.containers  = (inflation_stations, drawable)
-                player        = Player(1280 / 2, 720 / 2)
+                player        = Player(1280 / 2, 720 / 2, hard_mode=hard_mode)
                 asteroid_field = AsteroidField()
                 asteroid_field.butt_delay = 15.0  # suppressed until first shot or 15s elapses
                 state         = "GAME"
@@ -908,14 +1003,14 @@ def main():
                         space_amb_channel.play(space_amb_sound, loops=-1)
                     apply_settings(settings, audio_enabled, all_sounds_list, in_game=True)
 
-            if readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 2):
+            if (readme_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 2)) and not mode_picker_open:
                 open_readme()
 
-            if settings_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 3):
+            if (settings_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 3)) and not mode_picker_open:
                 settings_open = not settings_open
                 waiting_for_key = None
 
-            if exit_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 1):
+            if (exit_btn.draw(internal_surf, tick_sound, is_internal=True, target_res=internal_res) or (ctrl_confirm and menu_selection == 1)) and not mode_picker_open:
                 pygame.quit()
                 sys.exit()
 
@@ -956,6 +1051,9 @@ def main():
                             waiting_for_key = "shoot_key"
                         elif settings_row == 3:  # Brake key — A starts rebind
                             waiting_for_key = "brake_key"
+
+            if state == "MENU" and mode_picker_open:
+                draw_mode_picker(internal_surf, mode_selection, font, small_font)
 
         # ===================================================================
         # GAME STATE
@@ -1033,6 +1131,7 @@ def main():
                     station.dock()
                     inflation_station     = station
                     player.position       = station.seat()
+                    player.velocity       = pygame.Vector2(0, 0)
                     player.rotation       = -90         # nose pointing down the tube
                     draw_order(drawable, station, front=True)   # ship shows through the glass
                     inflation_selection   = 0
@@ -1267,7 +1366,7 @@ def main():
                     else:
                         high_score, death_freeze_timer = player_death(
                             score, high_score, audio_enabled, death_sound,
-                            death_sfx_length)
+                            death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
                         break
@@ -1293,7 +1392,7 @@ def main():
                         if audio_enabled: rubber_pop_sound.play()
                     else:
                         high_score, death_freeze_timer = player_death(
-                            score, high_score, audio_enabled, death_sound, death_sfx_length)
+                            score, high_score, audio_enabled, death_sound, death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
 
@@ -1374,7 +1473,7 @@ def main():
                     else:
                         high_score, death_freeze_timer = player_death(
                             score, high_score, audio_enabled, death_sound,
-                            death_sfx_length)
+                            death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
                         break  # player is dead, stop processing asteroids
@@ -1423,7 +1522,7 @@ def main():
                         else:
                             high_score, death_freeze_timer = player_death(
                                 score, high_score, audio_enabled,
-                                death_sound, death_sfx_length)
+                                death_sound, death_sfx_length, hard_mode)
                             sus_playing = False
                             state = "DYING"
                             break
@@ -1509,7 +1608,7 @@ def main():
                     else:
                         high_score, death_freeze_timer = player_death(
                             score, high_score, audio_enabled,
-                            death_sound, death_sfx_length)
+                            death_sound, death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
 
@@ -1529,7 +1628,7 @@ def main():
                     else:
                         high_score, death_freeze_timer = player_death(
                             score, high_score, audio_enabled,
-                            death_sound, death_sfx_length)
+                            death_sound, death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
 
@@ -1613,7 +1712,7 @@ def main():
                     else:
                         high_score, death_freeze_timer = player_death(
                             score, high_score, audio_enabled,
-                            death_sound, death_sfx_length)
+                            death_sound, death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
                 # Player shots hit suppository
@@ -1655,7 +1754,7 @@ def main():
                         if audio_enabled: rubber_pop_sound.play()
                     else:
                         high_score, death_freeze_timer = player_death(
-                            score, high_score, audio_enabled, death_sound, death_sfx_length)
+                            score, high_score, audio_enabled, death_sound, death_sfx_length, hard_mode)
                         sus_playing = False
                         state = "DYING"
                 # Player collides with segments
@@ -1669,7 +1768,7 @@ def main():
                             if audio_enabled: rubber_pop_sound.play()
                         else:
                             high_score, death_freeze_timer = player_death(
-                                score, high_score, audio_enabled, death_sound, death_sfx_length)
+                                score, high_score, audio_enabled, death_sound, death_sfx_length, hard_mode)
                             sus_playing = False
                             state = "DYING"
                 # Player shots hit head
@@ -2058,6 +2157,7 @@ def main():
                 # Respawn opening poop field — 99 × hardness (more chaotic each galaxy)
                 spawn_static_poops(int(99 * AsteroidField.speed_multiplier))
                 player.position = pygame.Vector2(640, 360)
+                player.velocity = pygame.Vector2(0, 0)
                 player.invincible_timer = 2.0
                 am_jam_paused  = False
                 am_jam_waiting = False

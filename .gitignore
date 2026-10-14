@@ -11,3 +11,8 @@ game_events.jsonl
 # Virtual environments
 .venv
 *:Zone.Identifier
+
+# Personal files — created by the game (defaults if missing), never committed
+highscore.txt
+highscore_hard.txt
+settings.json
