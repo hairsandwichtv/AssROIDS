@@ -13,10 +13,13 @@ INVINCIBLE_DURATION  = 1.5
 THRUSTER_DURATION    = 1.0
 THRUSTER_RECHARGE    = 60.0
 DP_DURATION          = 15.0  # seconds double-shot lasts
+BRAKE_GLOW_COLOR     = (255, 40, 40, 70)    # soft halo behind the ship while braking
+BRAKE_LINE_COLOR     = (255, 60, 60, 170)   # thin outline on top
 
 
 class Player(CircleShape):
     shoot_key = pygame.K_SPACE  # rebindable from settings menu
+    brake_key = pygame.K_LALT   # rebindable from settings menu
 
     def __init__(self, x, y):
         super().__init__(x, y, PLAYER_RADIUS)
@@ -44,6 +47,9 @@ class Player(CircleShape):
         self.dp_active = False
         self.dp_timer  = 0.0
         self.is_moving = False
+
+        # --- Brake (input only for now; future mechanics read is_braking) ---
+        self.is_braking = False
 
     # ------------------------------------------------------------------
     # Power-up helpers
@@ -145,12 +151,28 @@ class Player(CircleShape):
         img = self.shield_image if self.has_shield else self.original_image
         rotated  = pygame.transform.rotate(img, -self.rotation)
         new_rect = rotated.get_rect(center=(self.position.x, self.position.y))
+        if self.is_braking:
+            self._draw_brake_outline(screen, rotated, new_rect, BRAKE_GLOW_COLOR, 3)
         screen.blit(rotated, new_rect.topleft)
+        if self.is_braking:
+            self._draw_brake_outline(screen, rotated, new_rect, BRAKE_LINE_COLOR, 1)
+
+    def _draw_brake_outline(self, screen, sprite, rect, color, width):
+        """Trace the sprite's silhouette in a translucent color."""
+        points = pygame.mask.from_surface(sprite).outline()
+        if len(points) < 3:
+            return
+        pad     = width
+        overlay = pygame.Surface((rect.width + pad * 2, rect.height + pad * 2), pygame.SRCALPHA)
+        pygame.draw.lines(overlay, color, True, [(x + pad, y + pad) for x, y in points], width)
+        screen.blit(overlay, (rect.x - pad, rect.y - pad))
 
     def rotate(self, dt):
         self.rotation += PLAYER_TURN_SPEED * dt
 
     def move(self, dt, boost=False):
+        if self.is_braking:
+            return  # brake cancels all forward/backward movement; rotation still works
         forward = pygame.Vector2(0, 1).rotate(self.rotation)
         speed   = PLAYER_SPEED * (2.0 if boost else 1.0)
         self.position += forward * speed * dt
@@ -178,7 +200,8 @@ class Player(CircleShape):
                ctrl_angle=None, ctrl_magnitude=0.0, ctrl_throttle=0.0,
                ctrl_x_held=False, ctrl_dpad_fwd=False, ctrl_dpad_back=False,
                ctrl_dpad_left=False, ctrl_dpad_right=False,
-               ctrl_l3=False, ctrl_boost=False, ctrl_shoot=False, ctrl_speed=0.0, ctrl_config=0):
+               ctrl_l3=False, ctrl_boost=False, ctrl_shoot=False, ctrl_brake=False,
+               ctrl_speed=0.0, ctrl_config=0):
 
         # --- Timers ---
         if self.timer          > 0: self.timer          -= dt
@@ -199,12 +222,14 @@ class Player(CircleShape):
         # --- Input state ---
         keys = pygame.key.get_pressed()
         self.is_firing_beam = self.milk_beam_active and (keys[Player.shoot_key] or ctrl_shoot)
+        self.is_braking     = keys[Player.brake_key] or ctrl_brake
 
-        # Boost — keyboard Shift, LB, or L3 (L3 excluded on config 3, where it's
+        # Boost — keyboard Shift or L3 (L3 excluded on config 3, where it's
         # the steering stick; R3 handled in main)
+        # Braking blocks boost so thruster charge isn't burned while stopped.
         boost_held = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
                       or ctrl_boost
-                      or (ctrl_l3 and ctrl_config != 3))
+                      or (ctrl_l3 and ctrl_config != 3)) and not self.is_braking
 
         # --- Thruster ---
         if self.thruster_active:
@@ -270,6 +295,9 @@ class Player(CircleShape):
             if not self.is_moving and (ctrl_speed != 0 or boosting):
                 self.move((ctrl_speed if ctrl_speed != 0 else 1.0) * dt, boost=boosting)
                 self.is_moving = True
+
+        if self.is_braking:
+            self.is_moving = False   # no exhaust trail while held still
 
         # --- Screen clamping ---
         self.position.x = max(self.radius, min(self.position.x, 1280 - self.radius))
