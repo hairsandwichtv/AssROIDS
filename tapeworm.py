@@ -515,11 +515,12 @@ class TapewormHead(pygame.sprite.Sprite):
             return True
         return False
 
-    def beam_tick_ready(self):
-        """True at most once per BEAM_SEG_TICK — rate-limits milk beam segment damage."""
+    def beam_tick_ready(self, scale=1.0):
+        """True at most once per BEAM_SEG_TICK (x scale, for Hair Trigger) — rate-limits
+        milk beam segment damage."""
         if self._beam_tick > 0:
             return False
-        self._beam_tick = BEAM_SEG_TICK
+        self._beam_tick = BEAM_SEG_TICK * scale
         return True
 
     def damage_segment(self, seg_index, spice_level, live_heads=1):

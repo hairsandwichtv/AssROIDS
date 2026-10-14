@@ -13,6 +13,13 @@ INVINCIBLE_DURATION  = 1.5
 THRUSTER_DURATION    = 1.0
 THRUSTER_RECHARGE    = 60.0
 DP_DURATION          = 15.0  # seconds double-shot lasts
+# Endowments — picked at The Inflation Station, kept for the whole run
+ENDOWMENT_MAX_LEVEL = 10
+RUNS_SPEED_STEP     = 0.10   # The Runs: +10% move speed per level
+HAIR_TRIGGER_STEP   = 0.90   # Hair Trigger: shot cooldown x0.9 per level (~+11% fire rate)
+HAIR_TRIGGER_MIN_CD = 0.10   # never faster than 10 shots/s
+BASE_MAX_SHIELDS    = 2      # Layer Up: +1 condom slot per level
+AUTO_FIRE_DELAY     = 0.25   # hold fire this long before continuous fire kicks in; taps = 1 shot each
 BRAKE_GLOW_COLOR     = (255, 40, 40, 70)    # soft halo behind the ship while braking
 BRAKE_LINE_COLOR     = (255, 60, 60, 170)   # thin outline on top
 
@@ -30,7 +37,7 @@ class Player(CircleShape):
         self.shield_image   = pygame.transform.scale(SHIELD_IMG, (size, size)).convert_alpha()
 
         # --- Power-up states ---
-        self.shield_count     = 0   # 0=none, 1=condom, 2=double wrapped
+        self.shield_count     = 0   # 0=none, 1=condom, 2=double wrapped, 3+ with Layer Up
         self.invincible_timer = 0.0
 
         self.milk_beam_active = False
@@ -51,6 +58,11 @@ class Player(CircleShape):
         # --- Brake (input only for now; future mechanics read is_braking) ---
         self.is_braking = False
 
+        # --- Endowments (levels) ---
+        self.runs_level         = 0
+        self.hair_trigger_level = 0
+        self.layer_up_level     = 0
+
     # ------------------------------------------------------------------
     # Power-up helpers
     # ------------------------------------------------------------------
@@ -58,8 +70,26 @@ class Player(CircleShape):
     def has_shield(self):
         return self.shield_count > 0
 
+    @property
+    def max_shields(self):
+        return BASE_MAX_SHIELDS + self.layer_up_level
+
+    @property
+    def shot_cooldown(self):
+        return max(HAIR_TRIGGER_MIN_CD,
+                   PLAYER_SHOT_COOLDOWN_SECONDS * HAIR_TRIGGER_STEP ** self.hair_trigger_level)
+
+    @property
+    def hair_trigger_scale(self):
+        """Hair Trigger's time multiplier — shot cooldown and Milk Beam ticks both use it."""
+        return self.shot_cooldown / PLAYER_SHOT_COOLDOWN_SECONDS
+
+    @property
+    def move_speed(self):
+        return PLAYER_SPEED * (1.0 + RUNS_SPEED_STEP * self.runs_level)
+
     def activate_shield(self):
-        if self.shield_count < 2:
+        if self.shield_count < self.max_shields:
             self.shield_count += 1
 
     def consume_shield(self):
@@ -174,13 +204,13 @@ class Player(CircleShape):
         if self.is_braking:
             return  # brake cancels all forward/backward movement; rotation still works
         forward = pygame.Vector2(0, 1).rotate(self.rotation)
-        speed   = PLAYER_SPEED * (2.0 if boost else 1.0)
+        speed   = self.move_speed * (2.0 if boost else 1.0)
         self.position += forward * speed * dt
 
     def shoot(self):
         if self.timer > 0:
             return False
-        self.timer   = PLAYER_SHOT_COOLDOWN_SECONDS
+        self.timer   = self.shot_cooldown
         forward      = pygame.Vector2(0, 1).rotate(self.rotation)
         velocity     = forward * PLAYER_SHOT_SPEED
 

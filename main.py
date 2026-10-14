@@ -14,7 +14,7 @@ from nebula import Nebula
 from particles import ParticleManager
 from constants import *
 from asset_helper import asset_path, writable_path
-from player import Player
+from player import Player, AUTO_FIRE_DELAY
 from asteroid import Asteroid
 from asteroidfield import AsteroidField
 from shot import Shot
@@ -24,6 +24,8 @@ from enemy_ship import MandingoShip, MandingoShot, VulvaShip, GoldenSuppository
 from tapeworm import WormHole, TapewormHead, TapewormSegment, create_tapeworm, WORMHOLE_VISUAL_R, WORMHOLE_SPAWN_PCT, SEG_RADIUS, point_in_triangle, set_audio_enabled
 import tapeworm as _tapeworm_module
 from powerup import PowerUp
+from inflation_station import (InflationStation, ENDOWMENTS, endowment_card_rects,
+                               draw_endowment_menu, is_maxed)
 from circleshape import DEBUG_HITBOXES
 import gamepad
 from win_keymenu import block_alt_menu
@@ -35,6 +37,7 @@ POWERUP_SPAWN_BASE   = 20.0
 BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
 DEBUG_TAPEWORM_AT_START = False  # TESTING: spawn a wormhole + tapeworm when a new game starts
+DEBUG_INFLATION_AT_START = False # TESTING: The Inflation Station floats in when a new game starts
 _GALAXY_END_SIZE     = int(math.hypot(1280, 720) * 2)  # pre-computed diagonal
 
 class _FakeCircle:
@@ -312,9 +315,54 @@ def maybe_spawn_suppository(asteroid, suppositories, hardness):
         GoldenSuppository(asteroid.position.x, asteroid.position.y, velocity)
 
 
+def spawn_static_poops(count):
+    """Opening field for a galaxy — stationary, spinning poops clear of the player spawn."""
+    player_spawn = pygame.Vector2(1280 / 2, 720 / 2)
+    for _ in range(count):
+        while True:
+            pos = pygame.Vector2(random.randint(60, 1220), random.randint(60, 660))
+            if pos.distance_to(player_spawn) >= 120:
+                break
+        poop = Asteroid(pos.x, pos.y, ASTEROID_MIN_RADIUS)
+        poop.velocity  = pygame.Vector2(0, 0)
+        poop.spin_rate = random.uniform(-120, 120)  # random rotation
+        poop.is_static = True
+
+
+def to_internal(screen, pos):
+    """Window mouse position → 1280x720 internal coordinates (letterboxed)."""
+    win_w, win_h = screen.get_size()
+    if win_w / win_h > 1280 / 720:
+        sc = win_h / 720; ox = (win_w - 1280 * sc) / 2; oy = 0
+    else:
+        sc = win_w / 1280; ox = 0; oy = (win_h - 720 * sc) / 2
+    return ((pos[0] - ox) / sc, (pos[1] - oy) / sc)
+
+
+def draw_order(group, sprite, front):
+    """Move a sprite to the front (drawn last) or back (drawn first) of a draw group."""
+    others = [s for s in group.sprites() if s is not sprite]
+    group.empty()
+    if front:
+        group.add(*others, sprite)
+    else:
+        group.add(sprite, *others)
+
+
+def poops_on_screen(asteroids):
+    """Small poops (not butts) with any part visible on screen."""
+    count = 0
+    for a in asteroids:
+        if not a.is_butt:
+            r = a.visual_radius
+            if -r < a.position.x < 1280 + r and -r < a.position.y < 720 + r:
+                count += 1
+    return count
+
+
 def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
                      boss_death_sound, shake_timer, SHAKE_DURATION,
-                     wormholes=None, spice_level=0, boss_pos=None):
+                     wormholes=None, spice_level=0, boss_pos=None, wormhole_chance=0.50):
     """Shared logic for when any boss dies — clear field, boost speed, return updated score and shake_timer."""
     if audio_enabled: boss_death_sound.play()
     shake_timer = SHAKE_DURATION
@@ -329,8 +377,9 @@ def boss_death_clear(asteroids, score, audio_enabled, poop_splat_sound,
             asteroid.split()
     for asteroid in asteroids:
         asteroid.velocity *= 1.15
-    # 50% chance to spawn wormhole on boss death if none on screen
-    if not wormhole_spawned and wormholes is not None and random.random() < 0.50:
+    # Chance to spawn wormhole on boss death if none on screen —
+    # 50%, or 100% once the galaxy's static poops are gone
+    if not wormhole_spawned and wormholes is not None and random.random() < wormhole_chance:
         wx = boss_pos.x if boss_pos else 640
         wy = boss_pos.y if boss_pos else 360
         # Clamp to screen
@@ -545,6 +594,14 @@ def main():
     suppositories        = pygame.sprite.Group()
     wormholes            = pygame.sprite.Group()
     tapeworm_heads       = pygame.sprite.Group()
+    inflation_stations   = pygame.sprite.Group()
+    # Board tracking — reset every galaxy
+    static_cleared       = False  # all opening (static) poops gone → next boss always opens a wormhole
+    inflation_spawned    = False  # Inflation Station already came this galaxy
+    inflation_silence    = False  # Am Jam muted while the station is around (awkward silence)
+    inflation_station    = None   # the docked station while the Endowment menu is open
+    inflation_selection  = 0
+    inflation_input_delay = 0.0   # ignore confirms briefly so a held fire button can't pick
     galaxy_timer         = 0.0
     GALAXY_DURATION      = 3.5
     WARP_FLASH_DURATION  = 1.0
@@ -565,6 +622,8 @@ def main():
     ctrl_boost     = False
     ctrl_l3        = False
     ctrl_shoot     = False
+    fire_was_down  = False   # fire button state last frame — detects fresh presses
+    fire_hold_time = 0.0     # how long fire has been held; continuous fire after AUTO_FIRE_DELAY
     ctrl_brake     = False
     ctrl_speed     = 0.0
 
@@ -588,6 +647,8 @@ def main():
     _hs_value_v  = None
 
     while True:
+        inflation_nav     = 0       # Endowment menu input gathered from this frame's events
+        inflation_confirm = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -598,6 +659,24 @@ def main():
 
             # Controller hot-plug support
             pad.handle_event(event)
+
+            # Endowment menu — keyboard and mouse
+            if state == "INFLATION":
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_a, pygame.K_LEFT):
+                        inflation_nav = -1
+                    elif event.key in (pygame.K_d, pygame.K_RIGHT):
+                        inflation_nav = 1
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE,
+                                       Player.shoot_key):
+                        inflation_confirm = True
+                elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                    mpos = to_internal(screen, event.pos)
+                    for i, rect in enumerate(endowment_card_rects()):
+                        if rect.collidepoint(mpos):
+                            inflation_selection = i
+                            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                                inflation_confirm = True
 
             # Pause toggle — ESC or Start button during game
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -778,6 +857,10 @@ def main():
                 suppositories.empty()
                 wormholes.empty()
                 tapeworm_heads.empty()
+                inflation_stations.empty()
+                static_cleared          = False
+                inflation_spawned       = False
+                inflation_silence       = False
                 anti_turtle_timer       = ANTI_TURTLE_BASE
                 mandingo_engine_playing = False
                 vulva_engine_playing    = False
@@ -799,6 +882,7 @@ def main():
                 GoldenSuppository.containers = (suppositories, updatable, drawable)
                 WormHole.containers          = (wormholes,      updatable, drawable)
                 TapewormHead.containers      = (tapeworm_heads, updatable, drawable)
+                InflationStation.containers  = (inflation_stations, drawable)
                 player        = Player(1280 / 2, 720 / 2)
                 asteroid_field = AsteroidField()
                 asteroid_field.butt_delay = 15.0  # suppressed until first shot or 15s elapses
@@ -810,20 +894,15 @@ def main():
                 if audio_enabled and am_jam_sounds:
                     _am = random.choice(am_jam_sounds); pygame.mixer.music.load(_am); pygame.mixer.music.set_volume(0.3); pygame.mixer.music.play()
                 # Spawn 99 stationary poops, clear of player spawn
-                player_spawn = pygame.Vector2(1280 / 2, 720 / 2)
-                for _ in range(99):
-                    while True:
-                        pos = pygame.Vector2(
-                            random.randint(60, 1220),
-                            random.randint(60, 660)
-                        )
-                        if pos.distance_to(player_spawn) >= 120:
-                            break
-                    poop = Asteroid(pos.x, pos.y, ASTEROID_MIN_RADIUS)
-                    poop.velocity  = pygame.Vector2(0, 0)
-                    poop.spin_rate = random.uniform(-120, 120)  # random rotation
+                spawn_static_poops(99)
                 if DEBUG_TAPEWORM_AT_START:
                     WormHole(320, 360)   # left of the player, outside lunge range
+                if DEBUG_INFLATION_AT_START:
+                    draw_order(drawable, InflationStation(AsteroidField.speed_multiplier), front=False)
+                    inflation_spawned = True
+                    inflation_silence = True
+                    am_jam_paused     = True
+                    if audio_enabled: pygame.mixer.music.fadeout(1200)
                 if audio_enabled:
                     if space_amb_channel and space_amb_sound:
                         space_amb_channel.play(space_amb_sound, loops=-1)
@@ -890,7 +969,13 @@ def main():
                 if not pad.held(gamepad.A):
                     _suppress_ctrl_shoot = False
                 ctrl_shoot = False
-            if keys[Player.shoot_key] or ctrl_shoot:
+            # A fresh press fires once (ignored if still cooling down); holding only
+            # becomes continuous fire after AUTO_FIRE_DELAY, so a tap never sprays
+            fire_down    = keys[Player.shoot_key] or ctrl_shoot
+            fresh_press  = fire_down and not fire_was_down
+            fire_hold_time = fire_hold_time + dt if fire_down else 0.0
+            fire_was_down  = fire_down
+            if fresh_press or fire_hold_time >= AUTO_FIRE_DELAY:
                 if not player.milk_beam_active:
                     if player.shoot():
                         total_shots_fired += 1
@@ -900,6 +985,7 @@ def main():
                             first_shot_fired = True
                             asteroid_field.butt_delay = 3.0
 
+            player_prev_pos = pygame.Vector2(player.position)   # for the station's ring check
             player.update(dt, speed_multiplier=AsteroidField.speed_multiplier,
                           ctrl_angle=ctrl_angle, ctrl_magnitude=ctrl_magnitude,
                           ctrl_throttle=ctrl_throttle, ctrl_x_held=ctrl_x_held,
@@ -924,6 +1010,42 @@ def main():
 
             for tw in tapeworm_heads:
                 tw.update(dt, player.position, AsteroidField.speed_multiplier)
+
+            for station in inflation_stations:
+                station.update(dt)
+
+            # Board tracking — static poops gone → next boss always opens a wormhole;
+            # first moment with zero poops on screen → The Inflation Station floats in
+            if not static_cleared and not any(a.is_static for a in asteroids):
+                static_cleared = True
+            if not inflation_spawned and poops_on_screen(asteroids) == 0:
+                # Drawn beneath everything — the ship flies over it
+                draw_order(drawable, InflationStation(AsteroidField.speed_multiplier), front=False)
+                inflation_spawned = True
+                inflation_silence = True
+                am_jam_paused     = True
+                if audio_enabled:
+                    pygame.mixer.music.fadeout(1200)   # all the shit's gone... awkward silence
+
+            # Fly in through the black ring → dock inside the tube, open the Endowment menu
+            for station in inflation_stations:
+                if station.can_dock() and station.entered_ring(player_prev_pos, player.position):
+                    station.dock()
+                    inflation_station     = station
+                    player.position       = station.seat()
+                    player.rotation       = -90         # nose pointing down the tube
+                    draw_order(drawable, station, front=True)   # ship shows through the glass
+                    inflation_selection   = 0
+                    inflation_input_delay = 0.5
+                    state = "INFLATION"
+                    if audio_enabled: gulp_sound.play()
+                    break
+
+            # Station gone — bring the music back (unless a wormhole is holding it)
+            if inflation_silence and not inflation_stations:
+                inflation_silence = False
+                if not wormholes:
+                    am_jam_paused = False
 
             # Croaking ambience — loop while any tapeworm alive, stop when none
             if audio_enabled and _tapeworm_module._snd_croak and croak_channel:
@@ -1108,8 +1230,8 @@ def main():
             for powerup in list(powerups):
                 if powerup.collides_with(player):
                     if powerup.kind == "condom":
-                        if player.shield_count >= 2:
-                            # Already double wrapped — award 50 points
+                        if player.shield_count >= player.max_shields:
+                            # Already fully wrapped — award 50 points
                             score += 50
                             particles.spawn_score_pop(
                                 powerup.position.x, powerup.position.y,
@@ -1161,7 +1283,8 @@ def main():
                                 poop_splat_sound, boss_death_sound,
                                 shake_timer, SHAKE_DURATION,
                                 wormholes=wormholes, spice_level=spice_level,
-                                boss_pos=boss.position)
+                                boss_pos=boss.position,
+                                wormhole_chance=1.0 if static_cleared else 0.50)
 
                 # Dick Butt laser hits player
                 if boss.laser_hits(player) and not player.is_invincible():
@@ -1184,7 +1307,7 @@ def main():
             if player.is_firing_beam:
                 beam_damage_timer -= dt
                 if beam_damage_timer <= 0:
-                    beam_damage_timer = BEAM_DAMAGE_INTERVAL
+                    beam_damage_timer = BEAM_DAMAGE_INTERVAL * player.hair_trigger_scale
                     for asteroid in list(asteroids):
                         if beam_hits_circle(player, asteroid):
                             is_poop = asteroid.radius <= ASTEROID_MIN_RADIUS
@@ -1222,7 +1345,8 @@ def main():
                                     poop_splat_sound, boss_death_sound,
                                     shake_timer, SHAKE_DURATION,
                                 wormholes=wormholes, spice_level=spice_level,
-                                boss_pos=boss.position)
+                                boss_pos=boss.position,
+                                wormhole_chance=1.0 if static_cleared else 0.50)
                     for mandingo in list(mandingos):
                         if beam_hits_circle(player, mandingo):
                             total_shots_fired -= 1  # don't add to spice
@@ -1335,7 +1459,8 @@ def main():
                                         poop_splat_sound, boss_death_sound,
                                         shake_timer, SHAKE_DURATION,
                                 wormholes=wormholes, spice_level=spice_level,
-                                boss_pos=boss.position)
+                                boss_pos=boss.position,
+                                wormhole_chance=1.0 if static_cleared else 0.50)
                                     break
 
                 # Mandingo body collides with asteroids
@@ -1438,7 +1563,8 @@ def main():
                                     poop_splat_sound, boss_death_sound,
                                     shake_timer, SHAKE_DURATION,
                                 wormholes=wormholes, spice_level=spice_level,
-                                boss_pos=boss.position)
+                                boss_pos=boss.position,
+                                wormhole_chance=1.0 if static_cleared else 0.50)
                                 break
 
                 # Player shots hit Vulva
@@ -1583,7 +1709,7 @@ def main():
                             continue
                         fc = _FakeCircle(seg.position, SEG_RADIUS)
                         if beam_hits_circle(player, fc):
-                            if tw.beam_tick_ready():
+                            if tw.beam_tick_ready(player.hair_trigger_scale):
                                 particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
                                 for pos in tw.damage_segment(i, spice_level, len(tapeworm_heads))[::6]:
                                     particles.spawn_explosion(pos.x, pos.y, is_butt=False, count=4)
@@ -1629,8 +1755,9 @@ def main():
             draw_boss_sauce(internal_surf, 980, 50, 250, 25, butts_busted, font)
             hud_y = 50
             if player.has_shield:
-                label = "DOUBLE WRAPPED" if player.shield_count == 2 else "SHIELD ACTIVE"
-                color = (100, 255, 150) if player.shield_count == 2 else (100, 200, 255)
+                label = {1: "SHIELD ACTIVE", 2: "DOUBLE WRAPPED", 3: "TRIPLE WRAPPED"}.get(
+                    player.shield_count, f"{player.shield_count}X WRAPPED")
+                color = (100, 255, 150) if player.shield_count >= 2 else (100, 200, 255)
                 shield_txt = small_font.render(label, True, color)
                 internal_surf.blit(shield_txt, (20, hud_y))
                 # Draw shield icons
@@ -1650,6 +1777,39 @@ def main():
         # ===================================================================
         # WARP FLASH — 1 second vortex before galaxy transition
         # ===================================================================
+        elif state == "INFLATION":
+            # Frozen scene behind the Endowment menu — no music, just the awkward silence
+            stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
+            nebula.draw(internal_surf, spice_level)
+            for obj in drawable:
+                obj.draw(internal_surf)
+            draw_endowment_menu(internal_surf, player, inflation_selection, font, small_font)
+
+            # Controller nav — D-pad / left stick left-right, A to pick
+            _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
+            if pad.connected and _ctrl_nav_cooldown <= 0 and ctrl_nav_x != 0:
+                inflation_nav = ctrl_nav_x
+                _ctrl_nav_cooldown = 0.2
+            if ctrl_confirm_a:
+                inflation_confirm = True
+
+            if inflation_nav:
+                inflation_selection = (inflation_selection + inflation_nav) % len(ENDOWMENTS)
+                if audio_enabled and tick_sound: tick_sound.play()
+
+            inflation_input_delay = max(0.0, inflation_input_delay - dt)
+            if inflation_confirm and inflation_input_delay <= 0 and not is_maxed(player, inflation_selection):
+                attr = ENDOWMENTS[inflation_selection][0]
+                setattr(player, attr, getattr(player, attr) + 1)
+                if inflation_station:
+                    inflation_station.leave()
+                inflation_station       = None
+                player.invincible_timer = 1.5
+                _suppress_ctrl_shoot    = True
+                fire_was_down           = True   # the pick press isn't a shot
+                state = "GAME"
+                if audio_enabled: swoosh_sound.play()
+
         elif state == "PAUSED":
             # Draw the frozen game scene behind the overlay
             stars.draw(internal_surf, hardness=AsteroidField.speed_multiplier)
@@ -1875,6 +2035,10 @@ def main():
                 for s in list(suppositories):   s.kill()
                 for w in list(wormholes):       w.kill()
                 for t in list(tapeworm_heads):  t.kill()
+                for i in list(inflation_stations): i.kill()
+                static_cleared    = False
+                inflation_spawned = False
+                inflation_silence = False
                 for m in list(mandingos):       m.kill()
                 for ms in list(mandingo_shots): ms.kill()
                 for v in list(vulvas):          v.kill()
@@ -1892,17 +2056,7 @@ def main():
                 first_shot_fired  = False
                 asteroid_field.butt_delay = 15.0
                 # Respawn opening poop field — 99 × hardness (more chaotic each galaxy)
-                player_spawn = pygame.Vector2(1280 / 2, 720 / 2)
-                poop_count   = int(99 * AsteroidField.speed_multiplier)
-                for _ in range(poop_count):
-                    while True:
-                        pos = pygame.Vector2(random.randint(60, 1220),
-                                             random.randint(60, 660))
-                        if pos.distance_to(player_spawn) >= 120:
-                            break
-                    poop = Asteroid(pos.x, pos.y, ASTEROID_MIN_RADIUS)
-                    poop.velocity  = pygame.Vector2(0, 0)
-                    poop.spin_rate = random.uniform(-120, 120)
+                spawn_static_poops(int(99 * AsteroidField.speed_multiplier))
                 player.position = pygame.Vector2(640, 360)
                 player.invincible_timer = 2.0
                 am_jam_paused  = False

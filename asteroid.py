@@ -27,6 +27,7 @@ class Asteroid(CircleShape):
         self._sin_a        = 0.0
         self.grace_timer   = 0.0
         self.spin_rate     = 0.0   # deg/s override — used when velocity is zero
+        self.is_static     = False # True for the galaxy's opening stationary poops
 
         base_img = POOP_IMG if not self.is_butt else BUTT_IMG
         size = int(radius * 2)
