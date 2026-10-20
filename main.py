@@ -40,6 +40,7 @@ BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
 BEAM_PROBE_STEP      = 6      # px between beam-vs-tapeworm-head probes
 BEAM_PROBE_R         = 5      # beam half-width for those probes (same slack as beam_hits_circle)
+SMOOTH_SCALING       = True   # GPU upscale of the 1280x720 frame: smooth (linear) vs blocky (nearest)
 HUD_HIDE_KEY         = pygame.K_BACKQUOTE   # hold ` (or controller Y / RB) to hide the HUD
 RAMPAGE_SHIP_BASE    = 40.0   # enemy-ship timer after the Endowment pick (s, sped up by hardness)
 DEBUG_TAPEWORM_AT_START = False  # TESTING: spawn a wormhole + tapeworm when a new game starts
@@ -456,7 +457,16 @@ def main():
     except pygame.error:
         audio_enabled = False
 
-    screen        = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
+    # SCALED: the GPU stretches the 1280x720 frame to the window (letterboxed) and mouse
+    # positions arrive already in 1280x720 coordinates. Falls back to CPU scaling if unsupported.
+    # Must be set before the window's renderer is created; SDL reads hints from the environment
+    os.environ["SDL_RENDER_SCALE_QUALITY"] = "linear" if SMOOTH_SCALING else "nearest"
+    try:
+        screen     = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SCALED | pygame.RESIZABLE)
+        gpu_scaled = True
+    except pygame.error:
+        screen     = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
+        gpu_scaled = False
     block_alt_menu()   # Alt (brake) + Space would otherwise open the Windows system menu
     internal_res  = (1280, 720)
     internal_surf = pygame.Surface(internal_res)
@@ -695,6 +705,7 @@ def main():
     # Menu navigation — 0=start, 1=exit, 2=readme, 3=settings
     # -1 means mouse is in control
     menu_selection     = -1
+    menu_mouse_pos     = pygame.mouse.get_pos()   # last mouse spot seen on the menu
     _ctrl_nav_cooldown = 0.0  # prevents too-fast navigation
     ctrl_config = valid_config(settings.get("controller_config", 0))  # cached — only updated on change
 
@@ -721,7 +732,7 @@ def main():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if event.type == pygame.VIDEORESIZE:
+            if event.type == pygame.VIDEORESIZE and not gpu_scaled:   # SCALED windows resize themselves
                 screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
                 block_alt_menu()
 
@@ -885,8 +896,11 @@ def main():
                 internal_surf.blit(_hs_values[key], (cx - _hs_values[key].get_width() // 2, 130))
 
             # Controller menu navigation — blocked when settings open
-            if pygame.mouse.get_rel() != (0, 0):
+            # Mouse took over only if it really moved (get_rel() jitters under SCALED)
+            mouse_now = pygame.mouse.get_pos()
+            if mouse_now != menu_mouse_pos:
                 menu_selection = -1
+                menu_mouse_pos = mouse_now
             _ctrl_nav_cooldown = max(0.0, _ctrl_nav_cooldown - dt)
             if not settings_open and not mode_picker_open and pad.connected and _ctrl_nav_cooldown <= 0 and (ctrl_nav_x != 0 or ctrl_nav_y != 0):
                 if menu_selection == -1:
