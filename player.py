@@ -1,3 +1,4 @@
+import math
 import pygame
 from circleshape import CircleShape
 from shot import Shot
@@ -25,8 +26,11 @@ HAIR_TRIGGER_STEP   = 0.90   # Hair Trigger: shot cooldown x0.9 per level (~+11%
 HAIR_TRIGGER_MIN_CD = 0.10   # never faster than 10 shots/s
 BASE_MAX_SHIELDS    = 2      # Layer Up: +1 condom slot per level
 AUTO_FIRE_DELAY     = 0.25   # hold fire this long before continuous fire kicks in; taps = 1 shot each
-BRAKE_GLOW_COLOR     = (255, 40, 40, 70)    # soft halo behind the ship while braking
-BRAKE_LINE_COLOR     = (255, 60, 60, 170)   # thin outline on top
+BRAKE_AURA_COLOR    = (255, 45, 35)   # soft blurred halo behind the ship while braking
+BRAKE_AURA_PAD      = 12              # how far the aura spreads past the ship (px)
+BRAKE_AURA_PULSE    = 14.0            # pulse speed (rad/s)
+
+_brake_auras = {}   # id(ship image) → pre-blurred aura, rotated per frame
 
 
 class Player(CircleShape):
@@ -189,20 +193,36 @@ class Player(CircleShape):
         rotated  = pygame.transform.rotate(img, -self.rotation)
         new_rect = rotated.get_rect(center=(self.position.x, self.position.y))
         if self.is_braking:
-            self._draw_brake_outline(screen, rotated, new_rect, BRAKE_GLOW_COLOR, 3)
+            self._draw_brake_aura(screen, img)
         screen.blit(rotated, new_rect.topleft)
-        if self.is_braking:
-            self._draw_brake_outline(screen, rotated, new_rect, BRAKE_LINE_COLOR, 1)
 
-    def _draw_brake_outline(self, screen, sprite, rect, color, width):
-        """Trace the sprite's silhouette in a translucent color."""
-        points = pygame.mask.from_surface(sprite).outline()
-        if len(points) < 3:
-            return
-        pad     = width
-        overlay = pygame.Surface((rect.width + pad * 2, rect.height + pad * 2), pygame.SRCALPHA)
-        pygame.draw.lines(overlay, color, True, [(x + pad, y + pad) for x, y in points], width)
-        screen.blit(overlay, (rect.x - pad, rect.y - pad))
+    def _draw_brake_aura(self, screen, img):
+        """Soft red glow hugging the ship's silhouette, gently pulsing."""
+        aura = _brake_auras.get(id(img))
+        if aura is None:
+            aura = _brake_auras[id(img)] = self._build_brake_aura(img)
+        pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 1000 * BRAKE_AURA_PULSE)
+        glow  = pygame.transform.rotate(aura, -self.rotation)
+        glow.set_alpha(int(170 + 85 * pulse))
+        screen.blit(glow, glow.get_rect(center=(self.position.x, self.position.y)))
+
+    @staticmethod
+    def _build_brake_aura(img):
+        """Red silhouette, blurred by repeated down/up-scaling into a halo."""
+        pad = BRAKE_AURA_PAD
+        w, h = img.get_width() + pad * 2, img.get_height() + pad * 2
+        sil = pygame.mask.from_surface(img).to_surface(
+            setcolor=(*BRAKE_AURA_COLOR, 255), unsetcolor=(0, 0, 0, 0))
+        aura = pygame.Surface((w, h), pygame.SRCALPHA)
+        # Slightly swollen silhouette so the glow reaches out past the hull
+        sw = pad // 3   # swell scales with the spread so the blur never clips at the edge
+        d  = round(sw * 0.8)
+        for ox, oy in ((-sw, 0), (sw, 0), (0, -sw), (0, sw), (-d, -d), (d, d), (-d, d), (d, -d), (0, 0)):
+            aura.blit(sil, (pad + ox, pad + oy))
+        for factor in (6, 4):
+            small = pygame.transform.smoothscale(aura, (max(1, w // factor), max(1, h // factor)))
+            aura  = pygame.transform.smoothscale(small, (w, h))
+        return aura
 
     def rotate(self, dt):
         self.rotation += PLAYER_TURN_SPEED * dt

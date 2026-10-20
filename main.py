@@ -19,13 +19,15 @@ from asteroid import Asteroid
 from asteroidfield import AsteroidField
 from shot import Shot
 from button import Button
-from boss import Boss
+from boss import Boss, BOSS_SKINS
 from enemy_ship import MandingoShip, MandingoShot, VulvaShip, GoldenSuppository
 from tapeworm import WormHole, TapewormHead, TapewormSegment, create_tapeworm, WORMHOLE_VISUAL_R, WORMHOLE_SPAWN_PCT, SEG_RADIUS, point_in_triangle, set_audio_enabled
 import tapeworm as _tapeworm_module
 from powerup import PowerUp
 from inflation_station import (InflationStation, ENDOWMENTS, endowment_card_rects,
                                draw_endowment_menu, is_maxed)
+from deuce_detector import DeuceDetector
+from boss_sauce import BossSauce, BOSS_SAUCE_FULL
 from circleshape import DEBUG_HITBOXES
 import gamepad
 from win_keymenu import block_alt_menu
@@ -36,8 +38,12 @@ from win_keymenu import block_alt_menu
 POWERUP_SPAWN_BASE   = 20.0
 BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
+HUD_HIDE_KEY         = pygame.K_BACKQUOTE   # hold ` (or controller Y / RB) to hide the HUD
+RAMPAGE_SHIP_BASE    = 40.0   # enemy-ship timer after the Endowment pick (s, sped up by hardness)
 DEBUG_TAPEWORM_AT_START = False  # TESTING: spawn a wormhole + tapeworm when a new game starts
 DEBUG_INFLATION_AT_START = False # TESTING: The Inflation Station floats in when a new game starts
+DEBUG_BOSS_SAUCE_START   = None  # TESTING: e.g. 45 → new game opens with 45 butts busted (Boss Sauce bottle near full)
+DEBUG_DEUCE_START_POOPS  = None  # TESTING: e.g. 15 → new game opens with only 15 static poops (Deuce Detector final tiers)
 _GALAXY_END_SIZE     = int(math.hypot(1280, 720) * 2)  # pre-computed diagonal
 
 class _FakeCircle:
@@ -154,14 +160,14 @@ def open_readme():
 # ---------------------------------------------------------------------------
 # Draw helpers
 # ---------------------------------------------------------------------------
-def draw_boss_sauce(surface, x, y, width, height, current_butts, font):
-    progress_pct = min(int((current_butts / 50) * 100), 100)
-    pygame.draw.rect(surface, (50, 50, 50),  (x, y, width, height))
-    fill_width = int(width * (progress_pct / 100))
-    pygame.draw.rect(surface, (0, 255, 100), (x, y, fill_width, height))
-    pygame.draw.rect(surface, "white",       (x, y, width, height), 2)
-    label = font.render(f"BOSS SAUCE: {progress_pct}%", True, "white")
-    surface.blit(label, (x, y - 25))
+def poop_pop(points, multiplier, streak_mult):
+    """Score-pop text + color for a poop kill — shows the hardness and streak multipliers."""
+    text = f"+{points}"
+    if multiplier > 1:
+        text += f" x{multiplier}"
+    if streak_mult > 1:
+        return text + f" STREAK x{streak_mult}", (255, 140, 0)
+    return text, (255, 255, 100) if multiplier == 1 else (255, 180, 0)
 
 def beam_hits_circle(player, target):
     forward = pygame.Vector2(0, 1).rotate(player.rotation)
@@ -644,6 +650,13 @@ def main():
     inflation_station    = None   # the docked station while the Endowment menu is open
     inflation_selection  = 0
     inflation_input_delay = 0.0   # ignore confirms briefly so a held fire button can't pick
+    deuce                = DeuceDetector(tick_sound if audio_enabled else None)  # poops-left HUD meter
+    next_boss_skin       = random.choice(BOSS_SKINS)   # who's on the Boss Sauce label
+    sauce                = BossSauce(deuce.alert)
+    sauce.reset(next_boss_skin)
+    rampage_pending      = False  # Endowment picked — rampage starts once the invincibility wears off
+    rampage              = False  # post-station rampage: faster enemy ships, up to galaxy_number at once
+    galaxy_number        = 1
     galaxy_timer         = 0.0
     GALAXY_DURATION      = 3.5
     WARP_FLASH_DURATION  = 1.0
@@ -821,6 +834,9 @@ def main():
         ctrl_l3         = pad.held(gamepad.L3)
         ctrl_shoot      = pad.rt > 0 or pad.held(gamepad.A)
         ctrl_confirm_a  = pad.pressed(gamepad.A)
+        # Hold ` / Y / RB to hide the HUD — nothing for poops to hide behind
+        hud_hidden      = (pygame.key.get_pressed()[HUD_HIDE_KEY]
+                           or pad.held(gamepad.Y) or pad.held(gamepad.RB))
         # D-pad movement (works on all configs like W/A/S/D)
         ctrl_dpad_fwd   = pad.held(gamepad.DPAD_UP)
         ctrl_dpad_back  = pad.held(gamepad.DPAD_DOWN)
@@ -956,6 +972,13 @@ def main():
                 static_cleared          = False
                 inflation_spawned       = False
                 inflation_silence       = False
+                rampage_pending         = False
+                rampage                 = False
+                galaxy_number           = 1
+                next_boss_skin          = random.choice(BOSS_SKINS)
+                sauce.reset(next_boss_skin)
+                if DEBUG_BOSS_SAUCE_START:
+                    butts_busted = DEBUG_BOSS_SAUCE_START
                 anti_turtle_timer       = ANTI_TURTLE_BASE
                 mandingo_engine_playing = False
                 vulva_engine_playing    = False
@@ -989,7 +1012,8 @@ def main():
                 if audio_enabled and am_jam_sounds:
                     _am = random.choice(am_jam_sounds); pygame.mixer.music.load(_am); pygame.mixer.music.set_volume(0.3); pygame.mixer.music.play()
                 # Spawn 99 stationary poops, clear of player spawn
-                spawn_static_poops(99)
+                spawn_static_poops(DEBUG_DEUCE_START_POOPS or 99)
+                deuce.reset(poops_on_screen(asteroids), active=not DEBUG_INFLATION_AT_START, new_run=True)
                 if DEBUG_TAPEWORM_AT_START:
                     WormHole(320, 360)   # left of the player, outside lunge range
                 if DEBUG_INFLATION_AT_START:
@@ -1116,14 +1140,26 @@ def main():
             # first moment with zero poops on screen → The Inflation Station floats in
             if not static_cleared and not any(a.is_static for a in asteroids):
                 static_cleared = True
-            if not inflation_spawned and poops_on_screen(asteroids) == 0:
+            poop_count = poops_on_screen(asteroids) if not inflation_spawned else 0
+            if not inflation_spawned and poop_count == 0:
                 # Drawn beneath everything — the ship flies over it
                 draw_order(drawable, InflationStation(AsteroidField.speed_multiplier), front=False)
                 inflation_spawned = True
+                deuce.cleared()
                 inflation_silence = True
                 am_jam_paused     = True
                 if audio_enabled:
                     pygame.mixer.music.fadeout(1200)   # all the shit's gone... awkward silence
+
+            deuce.update(dt, poop_count)
+            sauce.update(dt, butts_busted)
+
+            # Shit's outta the way — once the post-pick invincibility wears off, the galaxy fights back
+            if rampage_pending and not player.is_invincible():
+                rampage_pending   = False
+                rampage           = True
+                anti_turtle_timer = 0.0   # first ship arrives with the banner; then every RAMPAGE_SHIP_BASE
+                deuce.rampage()
 
             # Fly in through the black ring → dock inside the tube, open the Endowment menu
             for station in inflation_stations:
@@ -1234,9 +1270,17 @@ def main():
                     vulva_engine_playing = False
 
             # Anti-turtle timer — randomly spawn Mandingo OR Vulva
-            anti_turtle_timer -= dt * AsteroidField.speed_multiplier
-            if anti_turtle_timer <= 0 and len(mandingos) == 0 and len(vulvas) == 0:
-                anti_turtle_timer = ANTI_TURTLE_BASE
+            # Rampage: faster timer, and as many ships at once as the galaxy number
+            # Wormhole/tapeworm on screen → timer frozen, no ships (alien ships are afraid of THE WORM,
+            # and the rainbow hole gets a moment of calm)
+            worm_event = bool(wormholes) or bool(tapeworm_heads)
+            if not worm_event:
+                anti_turtle_timer -= dt * AsteroidField.speed_multiplier
+            max_ships = galaxy_number if rampage else 1
+            if rampage and not worm_event and not bosses and not mandingos and not vulvas:
+                anti_turtle_timer = 0.0   # no lulls — the moment the sky is empty, another ship comes (not during boss fights)
+            if not worm_event and anti_turtle_timer <= 0 and len(mandingos) + len(vulvas) < max_ships:
+                anti_turtle_timer = RAMPAGE_SHIP_BASE if rampage else ANTI_TURTLE_BASE
                 spice_level       = max(0, total_shots_fired - spice_score)
                 edge = random.randint(0, 3)
                 if edge == 0:   ex, ey = random.randint(100, 1180), -120
@@ -1249,9 +1293,10 @@ def main():
                     MandingoShip(ex, ey, m_hp)
                     if audio_enabled:
                         mandingo_enter_sound.play()
-                        mandingo_engine_ch = pygame.mixer.find_channel()
-                        if mandingo_engine_ch:
-                            mandingo_engine_ch.play(mandingo_engine_sound, loops=-1)
+                        if not mandingo_engine_playing:   # one engine loop, however many Mandingos
+                            mandingo_engine_ch = pygame.mixer.find_channel()
+                            if mandingo_engine_ch:
+                                mandingo_engine_ch.play(mandingo_engine_sound, loops=-1)
                         mandingo_engine_playing = True
                 else:
                     # Spawn Vulva
@@ -1282,7 +1327,7 @@ def main():
                 total_shots_fired = max(total_shots_fired, spice_score)
             prev_milk_beam_active = player.milk_beam_active
 
-            if butts_busted >= 50:
+            if butts_busted >= BOSS_SAUCE_FULL:
                 spice_level = max(0, total_shots_fired - spice_score)
                 boss_hp     = 9 + (spice_level // 2)
                 # Pick a random off-screen spawn point on any edge
@@ -1301,10 +1346,13 @@ def main():
                 direction = (target - pygame.Vector2(bx, by)).normalize()
                 direction = direction.rotate(random.uniform(-25, 25))
                 speed = random.uniform(150, 220)
-                new_boss = Boss(bx, by, boss_hp)
+                new_boss = Boss(bx, by, boss_hp, skin=next_boss_skin)   # the boss on the label
                 new_boss.velocity = direction * speed
+                sauce.pop()
+                next_boss_skin = random.choice(BOSS_SKINS)
+                sauce.set_next(next_boss_skin)
                 butts_busted      = 0
-                anti_turtle_timer = ANTI_TURTLE_BASE  # boss spawned — reset turtle timer
+                anti_turtle_timer = RAMPAGE_SHIP_BASE if rampage else ANTI_TURTLE_BASE  # boss spawned — reset turtle timer
                 if audio_enabled:
                     if new_boss.skin == "dickbutt":
                         boss_enter_sound.play()
@@ -1413,15 +1461,17 @@ def main():
                             multiplier = max(1, int(AsteroidField.speed_multiplier))
                             if not is_poop:
                                 butts_busted += 1
+                                sauce.butt_busted(asteroid.position)
                                 stat_butts_killed += 1
-                            points = 1 * multiplier
+                                deuce.butt_shot()
+                            streak_mult = deuce.poop_shot(asteroid.position) if is_poop else 1
+                            points = 1 * multiplier * streak_mult
                             score += points
                             spice_score += 1
                             if is_poop:
                                 stat_poops_killed += 1
                                 if audio_enabled: poop_splat_sound.play()
-                                pop_text  = f"+{points}" if multiplier == 1 else f"+{points} x{multiplier}"
-                                pop_color = (255, 255, 100) if multiplier == 1 else (255, 180, 0)
+                                pop_text, pop_color = poop_pop(points, multiplier, streak_mult)
                                 particles.spawn_score_pop(asteroid.position.x,
                                                           asteroid.position.y - 10,
                                                           text=pop_text, color=pop_color)
@@ -1483,15 +1533,17 @@ def main():
                         multiplier = max(1, int(AsteroidField.speed_multiplier))
                         if not is_poop:
                             butts_busted += 1
+                            sauce.butt_busted(asteroid.position)
                             stat_butts_killed += 1
+                            deuce.butt_shot()
                         if is_poop:
-                            points = 1 * multiplier
+                            streak_mult = deuce.poop_shot(asteroid.position)
+                            points = 1 * multiplier * streak_mult
                             score += points
                             spice_score += 1
                             stat_poops_killed += 1
                             if audio_enabled: poop_splat_sound.play()
-                            pop_text  = f"+{points}" if multiplier == 1 else f"+{points} x{multiplier}"
-                            pop_color = (255, 255, 100) if multiplier == 1 else (255, 180, 0)
+                            pop_text, pop_color = poop_pop(points, multiplier, streak_mult)
                             particles.spawn_score_pop(asteroid.position.x,
                                                       asteroid.position.y - 10,
                                                       text=pop_text, color=pop_color)
@@ -1539,6 +1591,7 @@ def main():
                                 if audio_enabled: poop_splat_sound.play()
                             else:
                                 butts_busted += 1
+                                sauce.butt_busted(asteroid.position)
                                 if audio_enabled: butt_smack_sound.play()
                             particles.spawn_explosion(
                                 asteroid.position.x, asteroid.position.y,
@@ -1571,6 +1624,7 @@ def main():
                             if audio_enabled: poop_splat_sound.play()
                         else:
                             butts_busted += 1
+                            sauce.butt_busted(asteroid.position)
                             if audio_enabled: butt_smack_sound.play()
                         particles.spawn_explosion(
                             asteroid.position.x, asteroid.position.y,
@@ -1642,6 +1696,7 @@ def main():
                             if audio_enabled: poop_splat_sound.play()
                         else:
                             butts_busted += 1
+                            sauce.butt_busted(asteroid.position)
                             if audio_enabled: butt_smack_sound.play()
                         particles.spawn_explosion(
                             asteroid.position.x, asteroid.position.y,
@@ -1834,44 +1889,48 @@ def main():
                     else:
                         obj.draw_debug(internal_surf)
             particles.draw_foreground(internal_surf)
-            if score != _hud_score_v:
-                _hud_score   = font.render(f"SCORE: {score}", True, "white")
-                _hud_score_v = score
-            if spice_level != _hud_spice_v:
-                _hud_spice   = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
-                _hud_spice_v = spice_level
-            _hard_v = round(AsteroidField.speed_multiplier, 2)
-            if _hard_v != _hud_hard_v:
-                _hud_hard   = font.render(f"HARDNESS: {_hard_v:.2f}x", True, (255, 100, 100))
-                _hud_hard_v = _hard_v
-            internal_surf.blit(_hud_score, (20, 650))
-            internal_surf.blit(_hud_spice, (990, 80))
-            internal_surf.blit(_hud_hard,  (20, 680))
-            draw_thruster_bar(internal_surf, 20, 20, 250, 22,
-                              player.thruster_charge, player.thruster_active,
-                              player.thruster_locked, small_font,
-                              pygame.time.get_ticks())
-            draw_boss_sauce(internal_surf, 980, 50, 250, 25, butts_busted, font)
-            hud_y = 50
-            if player.has_shield:
-                label = {1: "SHIELD ACTIVE", 2: "DOUBLE WRAPPED", 3: "TRIPLE WRAPPED"}.get(
-                    player.shield_count, f"{player.shield_count}X WRAPPED")
-                color = (100, 255, 150) if player.shield_count >= 2 else (100, 200, 255)
-                shield_txt = small_font.render(label, True, color)
-                internal_surf.blit(shield_txt, (20, hud_y))
-                # Draw shield icons
-                for i in range(player.shield_count):
-                    internal_surf.blit(shield_icon, (20 + shield_txt.get_width() + 6 + i * 24, hud_y))
-                hud_y += 24
-            if player.is_firing_beam:
-                secs_left = math.ceil(player.milk_beam_timer)
-                beam_txt  = small_font.render(f"MILK BEAM: {secs_left}s", True, (200, 220, 255))
-                internal_surf.blit(beam_txt, (20, hud_y))
-                hud_y += 24
-            if player.dp_active:
-                secs_left = math.ceil(player.dp_timer)
-                dp_txt = small_font.render(f"DOUBLE SHOT: {secs_left}s", True, (184, 0, 0))
-                internal_surf.blit(dp_txt, (20, hud_y))
+            if not hud_hidden:   # ` / Y / RB held — clear view of the whole field
+                deuce.draw(internal_surf)   # bottom-center; drawn first so its edge glow sits under the HUD
+                if score != _hud_score_v:
+                    _hud_score   = font.render(f"SCORE: {score}", True, "white")
+                    _hud_score_v = score
+                if spice_level != _hud_spice_v:
+                    _hud_spice   = font.render(f"SPICE LEVEL: {spice_level}", True, (255, 165, 0))
+                    _hud_spice_v = spice_level
+                _hard_v = round(AsteroidField.speed_multiplier, 2)
+                if _hard_v != _hud_hard_v:
+                    _hud_hard   = font.render(f"HARDNESS: {_hard_v:.2f}x", True, (255, 100, 100))
+                    _hud_hard_v = _hard_v
+                internal_surf.blit(_hud_score, (20, 15))
+                internal_surf.blit(_hud_spice, (20, 45))
+                internal_surf.blit(_hud_hard,  (20, 75))
+                draw_thruster_bar(internal_surf, 640 - 125, 15, 250, 22,
+                                  player.thruster_charge, player.thruster_active,
+                                  player.thruster_locked, small_font,
+                                  pygame.time.get_ticks())
+                sauce.draw(internal_surf)
+                hud_y = 44   # power-up indicators stack top-center, under the thruster bar
+                if player.has_shield:
+                    label = {1: "SHIELD ACTIVE", 2: "DOUBLE WRAPPED", 3: "TRIPLE WRAPPED"}.get(
+                        player.shield_count, f"{player.shield_count}X WRAPPED")
+                    color = (100, 255, 150) if player.shield_count >= 2 else (100, 200, 255)
+                    shield_txt = small_font.render(label, True, color)
+                    row_w  = shield_txt.get_width() + 6 + player.shield_count * 24
+                    row_x  = 640 - row_w // 2
+                    internal_surf.blit(shield_txt, (row_x, hud_y))
+                    # Draw shield icons
+                    for i in range(player.shield_count):
+                        internal_surf.blit(shield_icon, (row_x + shield_txt.get_width() + 6 + i * 24, hud_y))
+                    hud_y += 24
+                if player.is_firing_beam:
+                    secs_left = math.ceil(player.milk_beam_timer)
+                    beam_txt  = small_font.render(f"MILK BEAM: {secs_left}s", True, (200, 220, 255))
+                    internal_surf.blit(beam_txt, (640 - beam_txt.get_width() // 2, hud_y))
+                    hud_y += 24
+                if player.dp_active:
+                    secs_left = math.ceil(player.dp_timer)
+                    dp_txt = small_font.render(f"DOUBLE SHOT: {secs_left}s", True, (184, 0, 0))
+                    internal_surf.blit(dp_txt, (640 - dp_txt.get_width() // 2, hud_y))
 
         # ===================================================================
         # WARP FLASH — 1 second vortex before galaxy transition
@@ -1904,6 +1963,7 @@ def main():
                     inflation_station.leave()
                 inflation_station       = None
                 player.invincible_timer = 1.5
+                rampage_pending         = True
                 _suppress_ctrl_shoot    = True
                 fire_was_down           = True   # the pick press isn't a shot
                 state = "GAME"
@@ -2138,6 +2198,9 @@ def main():
                 static_cleared    = False
                 inflation_spawned = False
                 inflation_silence = False
+                rampage_pending   = False
+                rampage           = False
+                galaxy_number    += 1
                 for m in list(mandingos):       m.kill()
                 for ms in list(mandingo_shots): ms.kill()
                 for v in list(vulvas):          v.kill()
@@ -2156,6 +2219,7 @@ def main():
                 asteroid_field.butt_delay = 15.0
                 # Respawn opening poop field — 99 × hardness (more chaotic each galaxy)
                 spawn_static_poops(int(99 * AsteroidField.speed_multiplier))
+                deuce.reset(poops_on_screen(asteroids))
                 player.position = pygame.Vector2(640, 360)
                 player.velocity = pygame.Vector2(0, 0)
                 player.invincible_timer = 2.0
