@@ -1,7 +1,7 @@
 import pygame
 import math
 import random
-from circleshape import CircleShape, DEBUG_HITBOXES
+from circleshape import CircleShape, SpriteHitbox
 from asset_helper import asset_path
 from constants import PLAYER_RADIUS, PLAYER_SPEED
 
@@ -18,15 +18,7 @@ def _get_streak_surf():
 # ---------------------------------------------------------------------------
 # Mandingo constants
 # ---------------------------------------------------------------------------
-MANDINGO_RADIUS         = PLAYER_RADIUS * 5      # 100px bounding radius (broad phase only)
-# Two intersecting ellipses — body (nose-tail) and wings (side pods)
-MANDINGO_BODY_A         = 0.95                   # body semi-major (along fuselage) — longer
-MANDINGO_BODY_B         = 0.15                   # body semi-minor (width of fuselage)
-MANDINGO_BODY_OFFSET    = 0.05                   # shift body ellipse forward along nose axis
-MANDINGO_BODY_LATERAL   = 0.02                   # shift body ellipse right (perpendicular)
-MANDINGO_WING_A         = 0.50
-MANDINGO_WING_B         = 0.22
-MANDINGO_WING_OFFSET    = -0.42                  # shift wing ellipse toward tail
+MANDINGO_RADIUS         = PLAYER_RADIUS * 5      # 100px — sprite size (hitbox is the sprite's pixels)
 MANDINGO_BASE_SPEED     = PLAYER_SPEED * 0.35
 MANDINGO_SHOT_RADIUS    = 21
 MANDINGO_SHOT_SPEED     = 360
@@ -61,7 +53,9 @@ class MandingoShot(CircleShape):
             self.kill()
 
 
-class MandingoShip(CircleShape):
+class MandingoShip(SpriteHitbox, CircleShape):
+    hit_key = "mandingo"
+
     def __init__(self, x, y, health):
         super().__init__(x, y, MANDINGO_RADIUS)
         self.health          = health
@@ -80,80 +74,6 @@ class MandingoShip(CircleShape):
         self.original_image = pygame.transform.scale(
             MANDINGO_IMG, (size, size)
         ).convert_alpha()
-        self._cos_a = 1.0
-        self._sin_a = 0.0
-        self._cos_w = 0.0
-        self._sin_w = 1.0
-
-    def _update_trig(self):
-        # Body axis — along the fuselage (nose to tail)
-        angle_rad   = math.radians(90 - self.angle)
-        self._cos_a  = math.cos(angle_rad)
-        self._sin_a  = math.sin(angle_rad)
-        # Wing axis — perpendicular to body (rotated 90°)
-        wing_rad     = angle_rad + math.pi / 2
-        self._cos_w  = math.cos(wing_rad)
-        self._sin_w  = math.sin(wing_rad)
-
-    def _ellipse_hit(self, cos_a, sin_a, ea, eb, other, offset_cos=None, offset_sin=None, offset=0.0, lateral=0.0):
-        """Test rotated ellipse against a circle.
-        offset shifts center along offset axis, lateral shifts perpendicular to it."""
-        r   = other.radius
-        oc  = offset_cos if offset_cos is not None else cos_a
-        os_ = offset_sin if offset_sin is not None else sin_a
-        # Perpendicular to offset axis
-        perp_cos = -os_
-        perp_sin =  oc
-        cx  = self.position.x + oc * self.radius * offset + perp_cos * self.radius * lateral
-        cy  = self.position.y + os_ * self.radius * offset + perp_sin * self.radius * lateral
-        dx  = other.position.x - cx
-        dy  = other.position.y - cy
-        a   = self.radius * ea
-        b   = self.radius * eb
-        lx  =  cos_a * dx + sin_a * dy
-        ly  = -sin_a * dx + cos_a * dy
-        return (lx / (a + r)) ** 2 + (ly / (b + r)) ** 2 <= 1.0
-
-    def collides_with(self, other):
-        if self.position.distance_squared_to(other.position) > (self.radius + other.radius) ** 2:
-            return False
-        # Body ellipse — long, along fuselage, shifted forward
-        body = self._ellipse_hit(self._cos_a, self._sin_a,
-                                 MANDINGO_BODY_A, MANDINGO_BODY_B, other,
-                                 offset=MANDINGO_BODY_OFFSET,
-                                 lateral=MANDINGO_BODY_LATERAL)
-        # Wing ellipse — wide, perpendicular, shifted toward tail
-        wing = self._ellipse_hit(self._cos_w, self._sin_w,
-                                 MANDINGO_WING_A, MANDINGO_WING_B, other,
-                                 offset_cos=self._cos_a, offset_sin=self._sin_a,
-                                 offset=MANDINGO_WING_OFFSET)
-        return body or wing
-
-    def draw_debug(self, screen):
-        if not DEBUG_HITBOXES:
-            return
-        # Body ellipse
-        for (cos_a, sin_a, ea, eb, oc, os_, off, lat) in [
-            (self._cos_a, self._sin_a, MANDINGO_BODY_A, MANDINGO_BODY_B,
-             self._cos_a, self._sin_a, MANDINGO_BODY_OFFSET, MANDINGO_BODY_LATERAL),
-            (self._cos_w, self._sin_w, MANDINGO_WING_A, MANDINGO_WING_B,
-             self._cos_a, self._sin_a, MANDINGO_WING_OFFSET, 0.0),
-        ]:
-            a  = self.radius * ea
-            b  = self.radius * eb
-            perp_cos = -os_
-            perp_sin =  oc
-            cx = self.position.x + oc * self.radius * off + perp_cos * self.radius * lat
-            cy = self.position.y + os_ * self.radius * off + perp_sin * self.radius * lat
-            points = []
-            for i in range(36):
-                t  = math.radians(i * 10)
-                ex = a * math.cos(t)
-                ey = b * math.sin(t)
-                wx = cos_a * ex - sin_a * ey + cx
-                wy = sin_a * ex + cos_a * ey + cy
-                points.append((int(wx), int(wy)))
-            pygame.draw.polygon(screen, (0, 255, 255), points, 1)
 
     def draw(self, screen):
         rotated = pygame.transform.rotate(self.original_image, self.angle)
@@ -187,8 +107,6 @@ class MandingoShip(CircleShape):
     def update(self, dt, player_pos, hardness, mandingo_shots):
         if self.flash_timer > 0:
             self.flash_timer = max(0.0, self.flash_timer - dt)
-
-        self._update_trig()
 
         to_player      = player_pos - self.position
         dist           = to_player.length()
@@ -260,15 +178,15 @@ VULVA_HYPERDRIVE  = 500.0                       # px/s during hyperdrive blast-o
 VULVA_LIFETIME    = 18.0                        # seconds before charge state
 VULVA_CHARGE_TIME = 1.8                         # flash duration before hyperdrive
 VULVA_FLASH_DUR   = 0.08
-VULVA_ELLIPSE_A   = 0.85                        # almond semi-major (along length)
-VULVA_ELLIPSE_B   = 0.38                        # almond semi-minor (across width)
 VULVA_STREAK_LEN  = 28                          # max trail positions stored
 VULVA_AVOID_RADIUS = 120                         # px — player within this range triggers steering
 
 VULVA_IMG = pygame.image.load(asset_path("Vulva Ship.png"))
 
 
-class VulvaShip(CircleShape):
+class VulvaShip(SpriteHitbox, CircleShape):
+    hit_key = "vulva"
+
     def __init__(self, x, y, health):
         super().__init__(x, y, VULVA_RADIUS)
         self.health          = health
@@ -280,8 +198,6 @@ class VulvaShip(CircleShape):
         self._charge_timer   = 0.0
         self._hyperdrive_dir = pygame.Vector2(0, -1)
         self._streak         = []           # (x, y) positions for wake trail
-        self._cos_a          = 1.0
-        self._sin_a          = 0.0
         self.boss_hit_ids    = set()
         self._entry_target   = pygame.Vector2(640 + random.uniform(-120, 120),
                                               360 + random.uniform(-120, 120))
@@ -297,42 +213,6 @@ class VulvaShip(CircleShape):
         self.original_image = pygame.transform.scale(
             VULVA_IMG, (size, size)
         ).convert_alpha()
-
-    # ── Trig cache ───────────────────────────────────────────────────────
-    def _update_trig(self):
-        rad = math.radians(-self.angle + 90)   # +90 aligns ellipse along ship facing
-        self._cos_a = math.cos(rad)
-        self._sin_a = math.sin(rad)
-
-    # ── Collision — rotated almond ellipse ───────────────────────────────
-    def collides_with(self, other):
-        dist_sq = self.position.distance_squared_to(other.position)
-        if dist_sq > (self.radius + other.radius) ** 2:
-            return False
-        r  = other.radius
-        a  = self.radius * VULVA_ELLIPSE_A
-        b  = self.radius * VULVA_ELLIPSE_B
-        dx = other.position.x - self.position.x
-        dy = other.position.y - self.position.y
-        lx =  self._cos_a * dx + self._sin_a * dy
-        ly = -self._sin_a * dx + self._cos_a * dy
-        return (lx / (a + r)) ** 2 + (ly / (b + r)) ** 2 <= 1.0
-
-    # ── Debug hitbox ─────────────────────────────────────────────────────
-    def draw_debug(self, screen):
-        if not DEBUG_HITBOXES:
-            return
-        a = self.radius * VULVA_ELLIPSE_A
-        b = self.radius * VULVA_ELLIPSE_B
-        points = []
-        for i in range(36):
-            t  = math.radians(i * 10)
-            ex = a * math.cos(t)
-            ey = b * math.sin(t)
-            wx = self._cos_a * ex - self._sin_a * ey + self.position.x
-            wy = self._sin_a * ex + self._cos_a * ey + self.position.y
-            points.append((int(wx), int(wy)))
-        pygame.draw.polygon(screen, (0, 200, 255), points, 1)
 
     # ── Draw ─────────────────────────────────────────────────────────────
     def draw(self, screen):
@@ -411,9 +291,6 @@ class VulvaShip(CircleShape):
                                         unsetcolor=(0, 0, 0, 0))
             screen.blit(mask_surf, rect.topleft)
 
-        if DEBUG_HITBOXES:
-            self.draw_debug(screen)
-
     # ── Update ───────────────────────────────────────────────────────────
     def _closest_anchor(self, pos):
         candidates = [(i, a) for i, a in enumerate(self._anchors)
@@ -461,7 +338,6 @@ class VulvaShip(CircleShape):
             self.flash_timer = max(0.0, self.flash_timer - dt)
 
         self.boss_hit_ids.clear()
-        self._update_trig()
 
         speed = VULVA_BASE_SPEED * hardness
 
@@ -576,7 +452,9 @@ SUPP_STREAK   = 20
 SUPP_IMG = pygame.image.load(asset_path("Golden Suppository.png"))
 
 
-class GoldenSuppository(CircleShape):
+class GoldenSuppository(SpriteHitbox, CircleShape):
+    hit_key = "suppository"
+
     def __init__(self, x, y, velocity):
         super().__init__(x, y, SUPP_RADIUS)
         self.velocity        = pygame.Vector2(velocity)
@@ -585,8 +463,6 @@ class GoldenSuppository(CircleShape):
         self.invincible      = 0.5      # invincibility timer on spawn
         self._bound_timer    = SUPP_LIFETIME
         self._streak         = []
-        self._cos_a          = 1.0
-        self._sin_a          = 0.0
 
         size = SUPP_RADIUS * 2
         self.original_image = pygame.transform.scale(
@@ -597,9 +473,6 @@ class GoldenSuppository(CircleShape):
         if self.velocity.length() > 0:
             self.angle = math.degrees(
                 math.atan2(-self.velocity.y, self.velocity.x)) + 90
-        rad = math.radians(-self.angle)
-        self._cos_a = math.cos(rad)
-        self._sin_a = math.sin(rad)
 
     def draw(self, screen):
         # White streak trail — single surface fill + blit

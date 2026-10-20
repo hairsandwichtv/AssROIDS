@@ -45,7 +45,8 @@ class Nebula:
         self.width  = width
         self.height = height
         self._last_spice = -1
-        self._surf = pygame.Surface((width, height), pygame.SRCALPHA)
+        self._surf  = pygame.Surface((width, height), pygame.SRCALPHA)
+        self._shape = None   # all blobs drawn once in white at half size; recolored by tinting a copy
 
         # Random blob layout — unique every run
         self.blobs = []
@@ -58,21 +59,30 @@ class Nebula:
             angle  = random.uniform(0, 360)
             self.blobs.append((x, y, radius, sx, sy, angle))
 
-    def _rebuild(self, spice):
-        self._surf.fill((0, 0, 0, 0))
-        r, g, b = _spice_color(spice)
-
+    def _build_shape(self):
+        """The blob layout in white — built once, at half size (it's all soft gradients).
+        Every blob shares one color, so tinting this layer matches drawing colored blobs."""
+        self._shape = pygame.Surface((self.width // 2, self.height // 2), pygame.SRCALPHA)
         for (x, y, radius, sx, sy, angle) in self.blobs:
-            blob = _make_blob(radius, r, g, b)
+            radius //= 2
+            blob = _make_blob(radius, 255, 255, 255)
             # Stretch the blob to give it an elliptical shape
             stretched_w = int(radius * 2 * sx)
             stretched_h = int(radius * 2 * sy)
             stretched   = pygame.transform.scale(blob, (stretched_w, stretched_h))
             # Rotate for variety
             rotated  = pygame.transform.rotate(stretched, angle)
-            rect     = rotated.get_rect(center=(x, y))
-            self._surf.blit(rotated, rect.topleft)
+            rect     = rotated.get_rect(center=(x // 2, y // 2))
+            self._shape.blit(rotated, rect.topleft)
 
+    def _rebuild(self, spice):
+        # ~3ms (was ~30ms redrawing every blob) — runs whenever the spice color steps
+        if self._shape is None:
+            self._build_shape()
+        r, g, b = _spice_color(spice)
+        tinted = self._shape.copy()
+        tinted.fill((r, g, b, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        self._surf = pygame.transform.smoothscale(tinted, (self.width, self.height))
         self._last_spice = spice
 
     def draw(self, surface, spice):

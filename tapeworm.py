@@ -4,6 +4,7 @@ import random
 from collections import deque
 from asset_helper import asset_path
 from constants import ASTEROID_MIN_RADIUS
+import hitmask
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -422,28 +423,43 @@ class TapewormHead(pygame.sprite.Sprite):
             self._snake_follow()
 
     # ── Draw ─────────────────────────────────────────────────────────────
+    def _draw_scale(self):
+        return self._spawn_scale if self._spawning else 1.0
+
+    def _pivot(self):
+        return self.wormhole.position if (self.anchored and self.wormhole) else self.position
+
+    def _seg_draw_center(self, seg_idx):
+        """Where segment seg_idx is drawn — scaled from the pivot while spawning, plus its wriggle."""
+        seg   = self.segments[seg_idx]
+        scale = self._draw_scale()
+        pivot = self._pivot()
+        phase = self._wriggle_t - seg_idx * 0.15
+        rad   = math.radians(seg.angle - 90)
+        perp  = pygame.Vector2(-math.sin(rad), math.cos(rad))
+        return pivot + (seg.position - pivot) * scale + perp * math.sin(phase) * 5.0 * scale
+
+    def _head_draw_center(self):
+        scale = self._draw_scale()
+        pivot = self._pivot()
+        rad   = math.radians(self.angle - 90)
+        perp  = pygame.Vector2(-math.sin(rad), math.cos(rad))
+        return pivot + (self.position - pivot) * scale + perp * math.sin(self._wriggle_t) * 5.0 * scale
+
     def draw(self, screen):
-        scale = self._spawn_scale if self._spawning else 1.0
+        scale = self._draw_scale()
         n = len(self.segments)
-        pivot = self.wormhole.position if (self.anchored and self.wormhole) else self.position
         for i, seg in enumerate(reversed(self.segments)):
             if not seg.alive:
                 continue
-            seg_idx  = n - 1 - i
-            phase    = self._wriggle_t - seg_idx * 0.15
-            rad      = math.radians(seg.angle - 90)
-            perp     = pygame.Vector2(-math.sin(rad), math.cos(rad))
-            offset   = perp * math.sin(phase) * 5.0
-            # Scale position from pivot during spawn
-            draw_pos = pivot + (seg.position - pivot) * scale
+            center   = self._seg_draw_center(n - 1 - i)
             seg_size = max(1, int(SEG_SIZE * scale))
             if seg_size != SEG_SIZE:
                 surf = pygame.transform.scale(
                     pygame.transform.rotate(_seg_img, seg.angle), (seg_size, seg_size))
             else:
                 surf = _get_seg_rotated(seg.angle)
-            rect = surf.get_rect(center=(int(draw_pos.x + offset.x * scale),
-                                         int(draw_pos.y + offset.y * scale)))
+            rect = surf.get_rect(center=(int(center.x), int(center.y)))
             screen.blit(surf, rect.topleft)
             if seg.flash_timer > 0:
                 alpha = int(200 * seg.flash_timer / FLASH_DUR)
@@ -453,17 +469,13 @@ class TapewormHead(pygame.sprite.Sprite):
 
         # Head
         head_size = max(1, int(self._head_size * scale))
-        head_pos  = pivot + (self.position - pivot) * scale
-        rad_face  = math.radians(self.angle - 90)
-        perp      = pygame.Vector2(-math.sin(rad_face), math.cos(rad_face))
-        h_offset  = perp * math.sin(self._wriggle_t) * 5.0 * scale
+        head_pos  = self._head_draw_center()
         if head_size != self._head_size:
             rotated = pygame.transform.scale(
                 pygame.transform.rotate(self._head_img, self.angle), (head_size, head_size))
         else:
             rotated = pygame.transform.rotate(self._head_img, self.angle)
-        rect = rotated.get_rect(center=(int(head_pos.x + h_offset.x),
-                                         int(head_pos.y + h_offset.y)))
+        rect = rotated.get_rect(center=(int(head_pos.x), int(head_pos.y)))
         screen.blit(rotated, rect.topleft)
         if self.flash_timer > 0:
             alpha = int(200 * self.flash_timer / FLASH_DUR)
@@ -473,31 +485,40 @@ class TapewormHead(pygame.sprite.Sprite):
 
     # ── Hitbox ───────────────────────────────────────────────────────────
 
-    def head_triangle(self):
-        tail_dir = self._tail_dir()
-        side     = pygame.Vector2(-tail_dir.y, tail_dir.x)
-        hr       = self.radius
-        inset    = 12 * hr / HEAD_RADIUS
-        center   = self.position - tail_dir * hr * 0.6
-        tip      = center + tail_dir * hr * 0.6
-        left     = center - tail_dir * hr * 0.3 + side * (hr * 0.5 - inset)
-        right    = center - tail_dir * hr * 0.3 - side * (hr * 0.5 - inset)
-        return [tip, left, right]
+    # Pixel-perfect, at the drawn positions (wriggle included). While spawning the
+    # sprites are drawn smaller but the masks stay full size — it only lasts a moment.
+    def _head_mask(self):
+        return hitmask.sprite_mask(("tw_head", self._head_size), self._head_img, self.angle)
+
+    def head_hits(self, obj):
+        """True if obj (player, shot, …) overlaps the head as drawn."""
+        center = self._head_draw_center()
+        r = hitmask.reach(self._head_img) + hitmask.reach_of(obj)
+        if center.distance_squared_to(obj.position) > r * r:
+            return False
+        return hitmask.overlaps(self._head_mask(), center, *hitmask.mask_of(obj))
+
+    def segment_hit(self, obj):
+        """Index of the first live segment obj overlaps, or None."""
+        obj_mask, obj_center = hitmask.mask_of(obj)
+        r = hitmask.reach(_seg_img) + hitmask.reach_of(obj)
+        for i, seg in enumerate(self.segments):
+            if not seg.alive:
+                continue
+            center = self._seg_draw_center(i)
+            if center.distance_squared_to(obj_center) > r * r:
+                continue
+            if hitmask.overlaps(hitmask.sprite_mask("tw_seg", _seg_img, seg.angle), center,
+                                obj_mask, obj_center):
+                return i
+        return None
 
     def draw_debug(self, screen):
-        tail_dir = self._tail_dir()
-        side     = pygame.Vector2(-tail_dir.y, tail_dir.x)
-        cx, cy   = int(self.position.x), int(self.position.y)
-        pygame.draw.line(screen, (0, 100, 255), (cx, cy),
-                         (int(cx + tail_dir.x * self.radius), int(cy + tail_dir.y * self.radius)), 3)
-        pygame.draw.line(screen, (0, 255, 0), (cx, cy),
-                         (int(cx + side.x * self.radius * 0.5), int(cy + side.y * self.radius * 0.5)), 2)
-        pygame.draw.polygon(screen, (255, 0, 0),
-                            [(int(p.x), int(p.y)) for p in self.head_triangle()], 2)
-        for seg in self.segments:
+        hitmask.draw_outline(screen, self._head_mask(), self._head_draw_center())
+        for i, seg in enumerate(self.segments):
             if seg.alive:
-                pygame.draw.circle(screen, (255, 255, 0),
-                                   (int(seg.position.x), int(seg.position.y)), SEG_RADIUS, 1)
+                hitmask.draw_outline(screen, hitmask.sprite_mask("tw_seg", _seg_img, seg.angle),
+                                     self._seg_draw_center(i), (255, 255, 0))
 
     # ── Damage ───────────────────────────────────────────────────────────
     def take_damage(self):
@@ -587,16 +608,6 @@ class TapewormHead(pygame.sprite.Sprite):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def point_in_triangle(p, t):
-    def sign(p1, p2, p3):
-        return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
-    p  = pygame.Vector2(p)
-    d1 = sign(p, t[0], t[1])
-    d2 = sign(p, t[1], t[2])
-    d3 = sign(p, t[2], t[0])
-    return not ((d1 < 0 or d2 < 0 or d3 < 0) and (d1 > 0 or d2 > 0 or d3 > 0))
-
-
 def create_tapeworm(wormhole, spice_level):
     chain_len = CHAIN_LENGTH + spice_level * 8
     n_segs    = chain_len // SEG_SPACING

@@ -21,7 +21,7 @@ from shot import Shot
 from button import Button
 from boss import Boss, BOSS_SKINS
 from enemy_ship import MandingoShip, MandingoShot, VulvaShip, GoldenSuppository
-from tapeworm import WormHole, TapewormHead, TapewormSegment, create_tapeworm, WORMHOLE_VISUAL_R, WORMHOLE_SPAWN_PCT, SEG_RADIUS, point_in_triangle, set_audio_enabled
+from tapeworm import WormHole, TapewormHead, TapewormSegment, create_tapeworm, WORMHOLE_VISUAL_R, WORMHOLE_SPAWN_PCT, SEG_RADIUS, set_audio_enabled
 import tapeworm as _tapeworm_module
 from powerup import PowerUp
 from inflation_station import (InflationStation, ENDOWMENTS, endowment_card_rects,
@@ -38,6 +38,8 @@ from win_keymenu import block_alt_menu
 POWERUP_SPAWN_BASE   = 20.0
 BEAM_DAMAGE_INTERVAL = 0.3
 BEAM_LENGTH          = 650
+BEAM_PROBE_STEP      = 6      # px between beam-vs-tapeworm-head probes
+BEAM_PROBE_R         = 5      # beam half-width for those probes (same slack as beam_hits_circle)
 HUD_HIDE_KEY         = pygame.K_BACKQUOTE   # hold ` (or controller Y / RB) to hide the HUD
 RAMPAGE_SHIP_BASE    = 40.0   # enemy-ship timer after the Endowment pick (s, sped up by hardness)
 DEBUG_TAPEWORM_AT_START = False  # TESTING: spawn a wormhole + tapeworm when a new game starts
@@ -169,13 +171,16 @@ def poop_pop(points, multiplier, streak_mult):
         return text + f" STREAK x{streak_mult}", (255, 140, 0)
     return text, (255, 255, 100) if multiplier == 1 else (255, 180, 0)
 
+def beam_origins(player):
+    """Where the milk beam starts — two side-by-side streams during Double Shot."""
+    right = pygame.Vector2(0, 1).rotate(player.rotation + 90) * (player.radius * 0.45)
+    if player.dp_active:
+        return [pygame.Vector2(player.position) - right, pygame.Vector2(player.position) + right]
+    return [pygame.Vector2(player.position)]
+
 def beam_hits_circle(player, target):
     forward = pygame.Vector2(0, 1).rotate(player.rotation)
-    right   = pygame.Vector2(0, 1).rotate(player.rotation + 90) * (player.radius * 0.45)
-    origins = ([pygame.Vector2(player.position) - right,
-                pygame.Vector2(player.position) + right]
-               if player.dp_active
-               else [pygame.Vector2(player.position)])
+    origins = beam_origins(player)
     to_target = target.position - player.position
     proj      = to_target.dot(forward)
     if proj < 0 or proj > BEAM_LENGTH:
@@ -187,14 +192,18 @@ def beam_hits_circle(player, target):
             return True
     return False
 
+def beam_hits_head(player, tw):
+    """Milk beam vs the tapeworm head's pixels — walks each stream in small steps."""
+    forward = pygame.Vector2(0, 1).rotate(player.rotation)
+    for origin in beam_origins(player):
+        for t in range(0, BEAM_LENGTH + 1, BEAM_PROBE_STEP):
+            if tw.head_hits(_FakeCircle(origin + forward * t, BEAM_PROBE_R)):
+                return True
+    return False
+
 def draw_milk_beam(surface, player):
     forward = pygame.Vector2(0, 1).rotate(player.rotation)
-    right   = pygame.Vector2(0, 1).rotate(player.rotation + 90) * (player.radius * 0.45)
-    origins = ([pygame.Vector2(player.position) - right,
-                pygame.Vector2(player.position) + right]
-               if player.dp_active
-               else [pygame.Vector2(player.position)])
-    for origin in origins:
+    for origin in beam_origins(player):
         start = origin + forward * (player.radius + 4)
         for _ in range(30):
             t      = random.uniform(0, BEAM_LENGTH)
@@ -451,6 +460,7 @@ def main():
     block_alt_menu()   # Alt (brake) + Space would otherwise open the Windows system menu
     internal_res  = (1280, 720)
     internal_surf = pygame.Surface(internal_res)
+    present_buf   = None   # window-sized scaling buffer, reused frame to frame
     font          = pygame.font.SysFont("Arial", 24, bold=True)
     small_font    = pygame.font.SysFont("Arial", 18, bold=True)
     stats_rip_font   = pygame.font.SysFont("Arial", 52, bold=True)
@@ -1403,11 +1413,7 @@ def main():
                     dy = player.position.y - boss.position.y
                     base_angle = math.degrees(math.atan2(-dy, dx)) + 180
                     boss.angle = base_angle + (90 if boss.skin == "coinpurse" else 0)
-                # Skip coin purse collision during charge grace period
-                _grace = (boss.skin == "coinpurse" and
-                          boss.special_state == "active" and
-                          getattr(boss, "_charge_grace", 0) > 0)
-                if not _grace and boss.collides_with(player) and not player.is_invincible():
+                if boss.collides_with(player) and not player.is_invincible():
                     if player.has_shield:
                         player.consume_shield()
                         if audio_enabled: rubber_pop_sound.play()
@@ -1617,8 +1623,7 @@ def main():
 
                 # Mandingo body collides with asteroids
                 for asteroid in list(asteroids):
-                    broad = mandingo.radius + asteroid.visual_radius
-                    if mandingo.position.distance_squared_to(asteroid.position) <= broad * broad:
+                    if mandingo.collides_with(asteroid):
                         if asteroid.radius <= 20:  # poop
                             mandingo.poops_destroyed += 1
                             if audio_enabled: poop_splat_sound.play()
@@ -1802,8 +1807,7 @@ def main():
                 if not tw.alive():
                     continue
                 # Player collides with head
-                if (point_in_triangle(player.position, tw.head_triangle())
-                        and not player.is_invincible()):
+                if tw.head_hits(player) and not player.is_invincible():
                     if player.has_shield:
                         player.consume_shield()
                         if audio_enabled: rubber_pop_sound.play()
@@ -1813,22 +1817,18 @@ def main():
                         sus_playing = False
                         state = "DYING"
                 # Player collides with segments
-                for i, seg in enumerate(list(tw.segments)):
-                    if not seg.alive:
-                        continue
-                    if (player.position.distance_squared_to(seg.position) <= (player.radius + SEG_RADIUS) ** 2
-                            and not player.is_invincible()):
-                        if player.has_shield:
-                            player.consume_shield()
-                            if audio_enabled: rubber_pop_sound.play()
-                        else:
-                            high_score, death_freeze_timer = player_death(
-                                score, high_score, audio_enabled, death_sound, death_sfx_length, hard_mode)
-                            sus_playing = False
-                            state = "DYING"
+                if not player.is_invincible() and tw.segment_hit(player) is not None:
+                    if player.has_shield:
+                        player.consume_shield()
+                        if audio_enabled: rubber_pop_sound.play()
+                    else:
+                        high_score, death_freeze_timer = player_death(
+                            score, high_score, audio_enabled, death_sound, death_sfx_length, hard_mode)
+                        sus_playing = False
+                        state = "DYING"
                 # Player shots hit head
                 for shot in list(shots):
-                    if point_in_triangle(shot.position, tw.head_triangle()):
+                    if tw.head_hits(shot):
                         shot.kill()
                         total_shots_fired -= 1
                         if tw.take_damage():
@@ -1838,24 +1838,20 @@ def main():
                 for shot in list(shots):
                     if not shot.alive():
                         continue
-                    hit = False
-                    for i, seg in enumerate(list(tw.segments)):
-                        if not seg.alive:
-                            continue
-                        if shot.position.distance_squared_to(seg.position) <= (shot.radius + SEG_RADIUS) ** 2:
-                            shot.kill()
-                            total_shots_fired -= 1
-                            particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
-                            for pos in tw.damage_segment(i, spice_level, len(tapeworm_heads))[::6]:
-                                particles.spawn_explosion(pos.x, pos.y, is_butt=False, count=4)
-                            hit = True
-                            break
-                    if hit:
+                    i = tw.segment_hit(shot)
+                    if i is not None:
+                        seg = tw.segments[i]
+                        shot.kill()
+                        total_shots_fired -= 1
+                        particles.spawn_explosion(seg.position.x, seg.position.y, is_butt=False, count=6)
+                        for pos in tw.damage_segment(i, spice_level, len(tapeworm_heads))[::6]:
+                            particles.spawn_explosion(pos.x, pos.y, is_butt=False, count=4)
                         break
                 # Beam hits head
-                if player.is_firing_beam and point_in_triangle(player.position, tw.head_triangle()):
-                    if tw.take_damage():
+                if player.is_firing_beam and beam_hits_head(player, tw):
+                    if tw.beam_tick_ready(player.hair_trigger_scale) and tw.take_damage():
                         particles.spawn_boss_explosion(tw.position.x, tw.position.y)
+                        continue   # head's dead — its segments went with it
                 # Beam hits segments
                 if player.is_firing_beam:
                     for i, seg in enumerate(list(tw.segments)):
@@ -1883,11 +1879,7 @@ def main():
             for obj in drawable:
                 obj.draw(internal_surf)
                 if DEBUG_HITBOXES and hasattr(obj, 'draw_debug'):
-                    if hasattr(obj, 'triangle'):
-                        verts = obj.triangle()
-                        pygame.draw.polygon(internal_surf, (255, 0, 0), [(v.x, v.y) for v in verts], 1)
-                    else:
-                        obj.draw_debug(internal_surf)
+                    obj.draw_debug(internal_surf)
             particles.draw_foreground(internal_surf)
             if not hud_hidden:   # ` / Y / RB held — clear view of the whole field
                 deuce.draw(internal_surf)   # bottom-center; drawn first so its edge glow sits under the HUD
@@ -2317,10 +2309,18 @@ def main():
         else:
             scale_w = win_w
             scale_h = int(win_w / target_ratio)
-        scaled_view = pygame.transform.scale(internal_surf, (scale_w, scale_h))
+        if (scale_w, scale_h) == internal_res:
+            scaled_view = internal_surf            # window is native size — nothing to scale
+        else:
+            # Scale into a reused buffer instead of a fresh surface every frame
+            if present_buf is None or present_buf.get_size() != (scale_w, scale_h):
+                present_buf = pygame.Surface((scale_w, scale_h)).convert()
+            pygame.transform.scale(internal_surf, (scale_w, scale_h), present_buf)
+            scaled_view = present_buf
         offset_x = (win_w - scale_w) // 2
         offset_y = (win_h - scale_h) // 2
-        screen.fill("black")
+        if (scale_w, scale_h) != (win_w, win_h) or shake_timer > 0:
+            screen.fill("black")                   # letterbox bars / shake edges
         shake_x = random.randint(-SHAKE_INTENSITY, SHAKE_INTENSITY) if shake_timer > 0 else 0
         shake_y = random.randint(-SHAKE_INTENSITY, SHAKE_INTENSITY) if shake_timer > 0 else 0
         screen.blit(scaled_view, (offset_x + shake_x, offset_y + shake_y))
