@@ -28,6 +28,7 @@ from inflation_station import (InflationStation, ENDOWMENTS, endowment_card_rect
                                draw_endowment_menu, is_maxed)
 from deuce_detector import DeuceDetector
 from boss_sauce import BossSauce, BOSS_SAUCE_FULL
+from warp_screen import WarpScreen, WARP_DURATION, warp_bonus
 from circleshape import DEBUG_HITBOXES
 import gamepad
 from win_keymenu import block_alt_menu
@@ -677,8 +678,11 @@ def main():
     rampage_pending      = False  # Endowment picked — rampage starts once the invincibility wears off
     rampage              = False  # post-station rampage: faster enemy ships, up to galaxy_number at once
     galaxy_number        = 1
+    galaxy_clock         = 0.0    # seconds of play this galaxy (pauses/menus don't count)
+    board_clear_time     = None   # galaxy_clock when the board hit zero poops — drives the warp bonus
+    warp                 = WarpScreen()
     galaxy_timer         = 0.0
-    GALAXY_DURATION      = 3.5
+    GALAXY_DURATION      = WARP_DURATION   # warp screen: narration, score, streak, bonus, next galaxy
     WARP_FLASH_DURATION  = 1.0
     warp_flash_timer     = 0.0
     warp_flash_wormhole  = None   # WormHole sprite reference during flash
@@ -999,6 +1003,9 @@ def main():
                 rampage_pending         = False
                 rampage                 = False
                 galaxy_number           = 1
+                galaxy_clock            = 0.0
+                board_clear_time        = None
+                warp.new_run()
                 next_boss_skin          = random.choice(BOSS_SKINS)
                 sauce.reset(next_boss_skin)
                 if DEBUG_BOSS_SAUCE_START:
@@ -1169,6 +1176,7 @@ def main():
                 # Drawn beneath everything — the ship flies over it
                 draw_order(drawable, InflationStation(AsteroidField.speed_multiplier), front=False)
                 inflation_spawned = True
+                board_clear_time  = galaxy_clock
                 deuce.cleared()
                 inflation_silence = True
                 am_jam_paused     = True
@@ -1176,6 +1184,7 @@ def main():
                     pygame.mixer.music.fadeout(1200)   # all the shit's gone... awkward silence
 
             deuce.update(dt, poop_count)
+            galaxy_clock += dt
             sauce.update(dt, butts_busted)
 
             # Shit's outta the way — once the post-pick invincibility wears off, the galaxy fights back
@@ -2125,6 +2134,9 @@ def main():
                 state        = "GALAXY_TRANSITION"
                 galaxy_timer = GALAXY_DURATION
                 player.invincible_timer = GALAXY_DURATION + 1.0
+                bonus = warp_bonus(board_clear_time)
+                warp.start(score, bonus, board_clear_time, deuce.galaxy_best, galaxy_number + 1)
+                score += bonus   # banked now so skipping can't lose it; the screen tallies it in
 
         # ===================================================================
         # GALAXY TRANSITION — warp effect before new galaxy
@@ -2188,6 +2200,13 @@ def main():
 
             # Ship drawn on top of expanding square
             internal_surf.blit(ship_img, ship_rect)
+
+            # Narration, score, best streak, warp bonus, next galaxy — fire skips after a moment
+            warp_fire = (pygame.key.get_pressed()[Player.shoot_key]
+                         or pygame.key.get_pressed()[pygame.K_RETURN] or ctrl_shoot)
+            if warp.update(dt, warp_fire):
+                galaxy_timer = 0
+            warp.draw(internal_surf)
             if galaxy_timer <= 0:
                 # Reset to new galaxy — keep hardness, reset spice/boss sauce/field
                 spice_score       = total_shots_fired   # zeroes out spice_level
@@ -2207,6 +2226,8 @@ def main():
                 rampage_pending   = False
                 rampage           = False
                 galaxy_number    += 1
+                galaxy_clock      = 0.0
+                board_clear_time  = None
                 for m in list(mandingos):       m.kill()
                 for ms in list(mandingo_shots): ms.kill()
                 for v in list(vulvas):          v.kill()

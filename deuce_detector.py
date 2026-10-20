@@ -144,6 +144,7 @@ class DeuceDetector:
         self.radar_angle  = 0.0
         self.banner_timer = 0.0
         self.milestones_hit = {th for th, _ in MILESTONES if start_count <= th}
+        self.galaxy_best  = self.streak   # best streak this galaxy (a carried-in streak counts)
 
     def cleared(self):
         """Board is clean — the station is coming. Celebrate, then fade away."""
@@ -175,6 +176,7 @@ class DeuceDetector:
         Returns the streak multiplier for this poop's points."""
         before = self.streak_mult()
         self.streak += 1
+        self.galaxy_best = max(self.galaxy_best, self.streak)
         self.streak_punch = max(self.streak_punch, 0.4)
         mult = self.streak_mult()
         if mult > before:
